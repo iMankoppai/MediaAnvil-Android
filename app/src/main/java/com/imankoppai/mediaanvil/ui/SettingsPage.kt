@@ -484,7 +484,10 @@ internal fun SettingsPage(library: LibraryState, controller: MediaController?) {
                         }
                         checkingUpdate = false
                         result.onSuccess { release ->
-                            if (AppUpdateChecker.isNewer(release.tagName, currentVersion)) {
+                            if (release == null) {
+                                // 仓库还没有任何 Release，这与"网络故障"是两回事，不能混为一句提示。
+                                message = context.getString(R.string.update_no_release)
+                            } else if (AppUpdateChecker.isNewer(release.tagName, currentVersion)) {
                                 library.reportUpdateRelease(release)
                             } else {
                                 message = context.getString(R.string.update_latest)

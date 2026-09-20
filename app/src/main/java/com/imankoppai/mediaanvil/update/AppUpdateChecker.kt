@@ -14,9 +14,10 @@ data class AppRelease(
 
 object AppUpdateChecker {
     private const val LATEST_RELEASE_URL =
-        "https://api.github.com/repos/iMankoppai/MediaAnvil/releases/latest"
+        "https://api.github.com/repos/iMankoppai/MediaAnvil-Android/releases/latest"
 
-    fun fetchLatest(): AppRelease {
+    /** Returns the latest release, or null when the repository has no release yet (HTTP 404). */
+    fun fetchLatest(): AppRelease? {
         val connection = URL(LATEST_RELEASE_URL).openConnection() as HttpURLConnection
         return try {
             connection.connectTimeout = 10_000
@@ -24,6 +25,8 @@ object AppUpdateChecker {
             connection.setRequestProperty("Accept", "application/vnd.github+json")
             connection.setRequestProperty("User-Agent", "MediaAnvil-Android")
             connection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            // 仓库尚未发布任何 Release 时 GitHub 返回 404；这不是故障，而是"暂无可更新版本"。
+            if (connection.responseCode == HttpURLConnection.HTTP_NOT_FOUND) return null
             check(connection.responseCode in 200..299) { "http_${connection.responseCode}" }
             val json = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             parseRelease(json)

@@ -190,6 +190,7 @@
     <string name="update_checking">Checking…</string>
     <string name="update_latest">You already have the latest version</string>
     <string name="update_failed">Could not check for updates; check your connection and retry</string>
+    <string name="update_no_release">No version has been published yet</string>
     <string name="update_available">New version available: %1$s</string>
     <string name="update_no_notes">No release notes are available.</string>
     <string name="update_download">Open download page</string>
