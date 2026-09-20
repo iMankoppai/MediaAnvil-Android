@@ -32,8 +32,8 @@ android {
         applicationId = "com.imankoppai.mediaanvil"
         minSdk = 26
         targetSdk = 36
-        versionCode = 29
-        versionName = "1.10.11"
+        versionCode = 1
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
