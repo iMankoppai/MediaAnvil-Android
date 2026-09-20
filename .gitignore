@@ -7,6 +7,12 @@ local.properties
 *.spec
 aqtinstall.log
 
+# Local build toolchain (JDK, Android SDK, Gradle): kept in the folder so this
+# repository builds on its own, never committed.
+.tools/
+.build-venv-windows/
+.workbuddy-ai/
+
 # Local user media in the project root
 /*.apk
 /*.wav
