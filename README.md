@@ -36,17 +36,16 @@ MediaAnvil Android 是面向本地 ASMR、广播剧、有声内容和音乐文�
 
 ## 本地构建
 
-需要 JDK 17、Android SDK 36（Build Tools 36.0.0）和 Gradle 9.6：
+需要 JDK 17、Android SDK 36（Build Tools 36.0.0）和 Gradle 9.6.0（仓库已含 wrapper，无需单独安装 Gradle）：
 
 ```text
-cd android
-gradle :app:testDebugUnitTest :app:assembleDebug
+gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
 调试 APK 位于：
 
 ```text
-android/app/build/outputs/apk/debug/app-debug.apk
+app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ## 长期签名与发布
@@ -54,7 +53,7 @@ android/app/build/outputs/apk/debug/app-debug.apk
 将 `signing.properties.example` 复制为 `signing.properties`，填写长期保存的 JKS 路径、密码和别名后运行：
 
 ```text
-gradle :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
+gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
 ```
 
 真实的 `signing.properties`、JKS 和密码均不得提交。GitHub 发布工作流使用以下仓库 Secrets 构建同一签名的 Android APK，并将 APK 与 SHA-256 一起加入 Release：
