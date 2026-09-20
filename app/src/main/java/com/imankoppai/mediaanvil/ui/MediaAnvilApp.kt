@@ -77,12 +77,32 @@ fun MediaAnvilApp() {
         if (editingTrack != null) editingTrack = null else tab = MainTab.Media
     }
 
+    // Android 13+ 必须显式申请通知权限，否则系统媒体通知（以及锁屏播放控制）不会出现。
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+
+    fun requestNotificationAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val legacyStoragePermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { library.rescan() }
     val allFilesPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
-    ) { library.rescan() }
+    ) {
+        library.rescan()
+        // 从"所有文件访问"设置页返回后才申请通知权限，避免两个系统界面同时弹出。
+        requestNotificationAccess()
+    }
 
     fun requestStorageAccess() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -151,7 +171,12 @@ fun MediaAnvilApp() {
                 android.Manifest.permission.READ_EXTERNAL_STORAGE,
             ) == PackageManager.PERMISSION_GRANTED
         }
-        if (!granted) requestStorageAccess()
+        if (!granted) {
+            requestStorageAccess()
+        } else {
+            // 存储权限已就绪时直接申请通知权限；走授权页那条路径由 allFilesPermission 回调负责。
+            requestNotificationAccess()
+        }
     }
 
     // Shared by both navigation layouts so switching orientation keeps the same pages.
