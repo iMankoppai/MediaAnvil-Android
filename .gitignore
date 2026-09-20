@@ -1,0 +1,37 @@
+__pycache__/
+*.py[cod]
+.gradle/
+.kotlin/
+build/
+local.properties
+*.spec
+aqtinstall.log
+
+# Local user media in the project root
+/*.apk
+/*.wav
+/*.mp3
+/*.flac
+/*.m4a
+/*.aac
+/*.ogg
+/*.opus
+/*.wma
+/*.ape
+/*.aiff
+/*.alac
+/*.vtt
+/*.srt
+/*.lrc
+/*.jpg
+/*.jpeg
+/*.png
+/*.webp
+/*.bmp
+
+# Release-signing secrets: never commit the keystore, its passwords or the
+# properties file that points at them.
+signing.properties
+mediaanvil-signing/
+*.jks
+*.keystore

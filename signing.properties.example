@@ -1,0 +1,6 @@
+# Copy to signing.properties for a local signed release build.
+# The keystore and this file are git-ignored; never commit real secrets.
+storeFile=../mediaanvil-signing/mediaanvil-release.jks
+keyAlias=mediaanvil
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME

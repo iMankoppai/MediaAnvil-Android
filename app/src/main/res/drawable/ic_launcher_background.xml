@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon background: the reference mark's royal blue (#0036AF) with a very
+     slight lift in the middle. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:type="radial"
+        android:centerX="0.5"
+        android:centerY="0.5"
+        android:gradientRadius="68%"
+        android:startColor="#0A49C8"
+        android:centerColor="#0139B4"
+        android:endColor="#0036AF" />
+</shape>
