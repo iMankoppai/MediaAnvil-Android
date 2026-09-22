@@ -52,7 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun SettingsPage(library: LibraryState, controller: MediaController?) {
+internal fun SettingsPage(library: LibraryViewModel, controller: MediaController?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
@@ -251,10 +251,15 @@ internal fun SettingsPage(library: LibraryState, controller: MediaController?) {
         val pickFolderLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.StartActivityForResult(),
         ) { result ->
-            android.util.Log.d("MediaAnvilUpdate", "picker result code=${result.resultCode} data=${result.data}")
             val uri = result.data?.data ?: return@rememberLauncherForActivityResult
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
             val folder = com.imankoppai.mediaanvil.data.DeviceAudioLibrary.treeUriToRelativeFolder(uri)
-            android.util.Log.d("MediaAnvilUpdate", "picker folder=$folder")
             if (folder != null && folder !in scanFolders) {
                 updateScanFolders(scanFolders + folder)
             }
@@ -455,7 +460,7 @@ internal fun SettingsPage(library: LibraryState, controller: MediaController?) {
                     Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = { library.startUpdateDownload() },
-                            enabled = release.apkUrl.isNotBlank(),
+                            enabled = release.apkUrl.isNotBlank() && release.sha256Url.isNotBlank(),
                         ) { Text(stringResource(R.string.update_action)) }
                         OutlinedButton(onClick = { library.dismissUpdate() }) {
                             Text(stringResource(R.string.update_dismiss))

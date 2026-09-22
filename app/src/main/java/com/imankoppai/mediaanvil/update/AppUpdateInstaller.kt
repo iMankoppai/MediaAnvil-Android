@@ -8,6 +8,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /** Downloads a release APK and hands it to the system package installer. */
 object AppUpdateInstaller {
@@ -15,10 +16,19 @@ object AppUpdateInstaller {
 
     fun apkFile(context: Context): File = File(File(context.filesDir, "update"), "mediaanvil-update.apk")
 
-    /** Streams [url] to the staged APK file, reporting integer percent progress. */
-    fun downloadApk(context: Context, url: String, onProgress: (Int) -> Unit): File {
+    /** Downloads to a temporary file and publishes it only after SHA-256 verification. */
+    fun downloadApk(
+        context: Context,
+        url: String,
+        sha256Url: String,
+        onProgress: (Int) -> Unit,
+    ): File {
+        requireGitHubHttpsUrl(url)
+        requireGitHubHttpsUrl(sha256Url)
         val target = apkFile(context)
+        val temporary = File(target.parentFile, "${target.name}.part")
         target.parentFile?.mkdirs()
+        temporary.delete()
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 10_000
@@ -28,7 +38,7 @@ object AppUpdateInstaller {
             check(connection.responseCode in 200..299) { "http_${connection.responseCode}" }
             val total = connection.contentLengthLong.takeIf { it > 0 } ?: -1L
             connection.inputStream.use { input ->
-                target.outputStream().use { output ->
+                temporary.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)
                     var written = 0L
                     var lastPercent = -1
@@ -48,14 +58,63 @@ object AppUpdateInstaller {
                     }
                 }
             }
-            check(target.length() > 0L) { "empty_download" }
+            check(temporary.length() > 0L) { "empty_download" }
+            val expected = parseExpectedSha256(downloadChecksum(sha256Url))
+            val actual = sha256(temporary)
+            check(actual.equals(expected, ignoreCase = true)) { "sha256_mismatch" }
+            if (target.exists()) check(target.delete()) { "old_update_delete_failed" }
+            check(temporary.renameTo(target)) { "update_publish_failed" }
             return target
         } catch (failure: Throwable) {
-            target.delete()
+            temporary.delete()
             throw failure
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun downloadChecksum(url: String): String {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        return try {
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 15_000
+            connection.instanceFollowRedirects = true
+            connection.setRequestProperty("User-Agent", "MediaAnvil-Android")
+            check(connection.responseCode in 200..299) { "checksum_http_${connection.responseCode}" }
+            val length = connection.contentLengthLong
+            check(length <= 8 * 1024) { "checksum_response_too_large" }
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                val text = reader.readText()
+                check(text.length <= 8 * 1024) { "checksum_response_too_large" }
+                text
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    internal fun parseExpectedSha256(text: String): String =
+        Regex("(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+            .find(text)?.value?.lowercase()
+            ?: error("invalid_sha256_file")
+
+    internal fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    private fun requireGitHubHttpsUrl(value: String) {
+        val url = URL(value)
+        require(url.protocol.equals("https", ignoreCase = true)) { "update_url_not_https" }
+        require(url.host.equals("github.com", ignoreCase = true)) { "update_url_not_github" }
     }
 
     /** Android 8+: the user must allow this app to install packages once. */

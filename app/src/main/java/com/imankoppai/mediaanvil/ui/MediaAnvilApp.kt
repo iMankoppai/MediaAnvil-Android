@@ -42,7 +42,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -52,6 +51,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.imankoppai.mediaanvil.R
 import com.imankoppai.mediaanvil.playback.PlaybackService
 
@@ -65,8 +65,7 @@ private enum class MainTab(val titleRes: Int) {
 @SuppressLint("UnsafeOptInUsageError")
 fun MediaAnvilApp() {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val library = remember { LibraryState(context, scope) }
+    val library: LibraryViewModel = viewModel()
     var controller by remember { mutableStateOf<MediaController?>(null) }
     // Survives the activity recreation a system locale change triggers, so
     // switching language stays on the current tab instead of resetting to Media.
@@ -171,10 +170,9 @@ fun MediaAnvilApp() {
                 android.Manifest.permission.READ_EXTERNAL_STORAGE,
             ) == PackageManager.PERMISSION_GRANTED
         }
-        if (!granted) {
-            requestStorageAccess()
-        } else {
-            // 存储权限已就绪时直接申请通知权限；走授权页那条路径由 allFilesPermission 回调负责。
+        if (granted) {
+            // Do not throw the user into the broad-storage settings screen on first launch.
+            // The empty-library explanation owns that explicit user action.
             requestNotificationAccess()
         }
     }

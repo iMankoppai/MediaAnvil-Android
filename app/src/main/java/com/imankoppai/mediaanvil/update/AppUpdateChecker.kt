@@ -10,6 +10,7 @@ data class AppRelease(
     val notes: String,
     val pageUrl: String,
     val apkUrl: String,
+    val sha256Url: String,
 )
 
 object AppUpdateChecker {
@@ -39,23 +40,29 @@ object AppUpdateChecker {
         val item = JSONObject(json)
         val tag = item.getString("tag_name")
         var apkUrl = ""
+        var apkName = ""
+        val assetUrls = linkedMapOf<String, String>()
         val assets = item.optJSONArray("assets")
         if (assets != null) {
             for (index in 0 until assets.length()) {
                 val asset = assets.optJSONObject(index) ?: continue
+                val name = asset.optString("name")
                 val url = asset.optString("browser_download_url")
-                if (asset.optString("name").endsWith(".apk") && url.isNotBlank()) {
+                if (name.isNotBlank() && url.isNotBlank()) assetUrls[name] = url
+                if (apkUrl.isBlank() && name.endsWith(".apk", ignoreCase = true) && url.isNotBlank()) {
                     apkUrl = url
-                    break
+                    apkName = name
                 }
             }
         }
+        val sha256Url = assetUrls["$apkName.sha256"].orEmpty()
         return AppRelease(
             tagName = tag,
             title = item.optString("name").ifBlank { tag },
             notes = item.optString("body"),
             pageUrl = item.getString("html_url"),
             apkUrl = apkUrl,
+            sha256Url = sha256Url,
         )
     }
 

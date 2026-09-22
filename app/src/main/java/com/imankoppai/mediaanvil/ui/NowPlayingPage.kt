@@ -65,6 +65,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -107,7 +108,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun NowPlayingPage(
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: MediaController?,
     onOpenLibrary: () -> Unit,
 ) {
@@ -159,27 +160,40 @@ internal fun NowPlayingPage(
     }
     val pagerState = rememberPagerState(initialPage = 0) { 2 }
 
-    LaunchedEffect(controller) {
-        controller?.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
-        fun syncFromPlayer() {
-            controller?.let { player ->
-                isPlaying = player.isPlaying
-                positionMs = player.currentPosition.coerceAtLeast(0L)
-                durationMs = player.duration.coerceAtLeast(0L)
-                // The player queue may be a filtered subset (group, search,
-                // album groups, shuffle order); map by media id instead of
-                // treating its index as an index into the full track list.
-                val currentId = player.currentMediaItem?.mediaId
-                val mapped = currentId?.let { id -> library.tracks.indexOfFirst { it.uri.toString() == id } } ?: -1
-                if (mapped >= 0) {
-                    library.selectedIndex = mapped
-                }
-            }
+    fun syncFromPlayer(player: Player, includeProgress: Boolean = true) {
+        isPlaying = player.isPlaying
+        if (includeProgress) {
+            positionMs = player.currentPosition.coerceAtLeast(0L)
+            durationMs = player.duration.coerceAtLeast(0L)
         }
-        syncFromPlayer()
-        while (true) {
-            delay(300)
-            syncFromPlayer()
+        // The player queue may be a filtered subset (group, search,
+        // album groups, shuffle order); map by media id instead of
+        // treating its index as an index into the full track list.
+        val currentId = player.currentMediaItem?.mediaId
+        val mapped = currentId?.let { id -> library.tracks.indexOfFirst { it.uri.toString() == id } } ?: -1
+        if (mapped >= 0) library.selectedIndex = mapped
+    }
+
+    DisposableEffect(controller, library.tracks) {
+        val player = controller
+        if (player == null) return@DisposableEffect onDispose { }
+        player.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) = syncFromPlayer(player)
+        }
+        syncFromPlayer(player)
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    // Position changes continuously only during playback. Discrete state changes
+    // (track, pause, seek, duration) arrive through Player.Listener above.
+    LaunchedEffect(controller, isPlaying) {
+        val player = controller ?: return@LaunchedEffect
+        while (isPlaying) {
+            positionMs = player.currentPosition.coerceAtLeast(0L)
+            durationMs = player.duration.coerceAtLeast(0L)
+            delay(500)
         }
     }
 
@@ -480,7 +494,7 @@ private fun TimeLabels(positionMs: Long, durationMs: Long, modifier: Modifier = 
 }
 
 @Composable
-private fun TransportRow(library: LibraryState, controller: MediaController?, isPlaying: Boolean) {
+private fun TransportRow(library: LibraryViewModel, controller: MediaController?, isPlaying: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -639,7 +653,7 @@ internal fun lyricsTimestampLabel(ms: Long): String {
 
 @Composable
 private fun LyricsView(
-    library: LibraryState,
+    library: LibraryViewModel,
     track: AudioTrack,
     positionMs: Long,
     onSeek: (Long) -> Unit,
@@ -1140,148 +1154,6 @@ private fun LyricsView(
         )
     }
 }
-
-private val QueueRowHeight = 64.dp
-
-private data class QueueEntry(val index: Int, val mediaId: String, val title: String, val artist: String?)
-
-private fun queueEntries(controller: MediaController?): List<QueueEntry> {
-    val player = controller ?: return emptyList()
-    return (0 until player.mediaItemCount).map { index ->
-        val item = player.getMediaItemAt(index)
-        QueueEntry(
-            index = index,
-            mediaId = item.mediaId,
-            title = item.mediaMetadata.title?.toString().orEmpty(),
-            artist = item.mediaMetadata.artist?.toString(),
-        )
-    }
-}
-
-private fun playNextAfterCurrent(controller: MediaController?, track: AudioTrack, afterIndex: Int) {
-    val player = controller ?: return
-    val item = androidx.media3.common.MediaItem.Builder()
-        .setUri(track.uri)
-        .setMediaId(track.uri.toString())
-        .setMediaMetadata(
-            androidx.media3.common.MediaMetadata.Builder()
-                .setTitle(track.title)
-                .setArtist(track.artist)
-                .setAlbumTitle(track.album)
-                .build(),
-        )
-        .build()
-    player.addMediaItems((afterIndex + 1).coerceAtMost(player.mediaItemCount), listOf(item))
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun QueueSheet(library: LibraryState, controller: MediaController?, onDismiss: () -> Unit) {
-    var entries by remember { mutableStateOf(queueEntries(controller)) }
-    var currentIndex by remember { mutableIntStateOf(controller?.currentMediaItemIndex ?: -1) }
-    LaunchedEffect(controller) {
-        while (true) {
-            delay(400)
-            entries = queueEntries(controller)
-            currentIndex = controller?.currentMediaItemIndex ?: -1
-        }
-    }
-    var draggingIndex by remember { mutableStateOf(-1) }
-    var dragOffsetY by remember { mutableStateOf(0f) }
-    val rowHeightPx = with(LocalDensity.current) { QueueRowHeight.toPx() }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Text(
-            stringResource(R.string.play_queue) + " · " + stringResource(R.string.queue_count, entries.size),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-        )
-        LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-            itemsIndexed(entries) { position, entry ->
-                val track = library.tracks.firstOrNull { it.uri.toString() == entry.mediaId }
-                val dragging = draggingIndex == position
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(QueueRowHeight)
-                        .graphicsLayer { if (dragging) translationY = dragOffsetY }
-                        .pointerInput(Unit) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = {
-                                    draggingIndex = position
-                                    dragOffsetY = 0f
-                                },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    dragOffsetY += amount.y
-                                },
-                                onDragEnd = {
-                                    val from = draggingIndex
-                                    if (from in entries.indices && dragOffsetY != 0f) {
-                                        val to = (from + kotlin.math.round(dragOffsetY / rowHeightPx).toInt())
-                                            .coerceIn(0, entries.size - 1)
-                                        if (to != from) controller?.moveMediaItem(from, to)
-                                    }
-                                    draggingIndex = -1
-                                    dragOffsetY = 0f
-                                },
-                                onDragCancel = {
-                                    draggingIndex = -1
-                                    dragOffsetY = 0f
-                                },
-                            )
-                        }
-                        .clickable {
-                            controller?.seekTo(entry.index, 0)
-                            controller?.play()
-                            onDismiss()
-                        }
-                        .background(
-                            if (entry.index == currentIndex) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                        )
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    track?.let { TrackCover(it, size = 40.dp) }
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            entry.title.ifEmpty { stringResource(R.string.unknown_artist) },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (entry.index == currentIndex) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            entry.artist ?: stringResource(R.string.unknown_artist),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    track?.let {
-                        IconButton(onClick = { playNextAfterCurrent(controller, it, entry.index) }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.PlaylistAdd,
-                                contentDescription = stringResource(R.string.play_next),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    IconButton(onClick = { controller?.removeMediaItem(entry.index) }) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = stringResource(R.string.remove_from_queue),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 @Composable
 private fun SeekIntervalButton(

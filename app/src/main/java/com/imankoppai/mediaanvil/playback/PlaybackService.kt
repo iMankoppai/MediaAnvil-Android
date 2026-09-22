@@ -55,10 +55,13 @@ class PlaybackService : MediaSessionService() {
 
     private val loopTicker = object : Runnable {
         override fun run() {
+            var nextDelayMs = IDLE_POLL_MS
             if (preferences.sleepTimerDeadlineAt != 0L &&
                 System.currentTimeMillis() >= preferences.sleepTimerDeadlineAt
             ) {
                 fireSleepTimer()
+            } else if (preferences.sleepTimerDeadlineAt != 0L) {
+                nextDelayMs = PLAYBACK_POLL_MS
             }
             mediaSession?.player?.let { player ->
                 val active = loopEndMs > loopStartMs
@@ -69,6 +72,7 @@ class PlaybackService : MediaSessionService() {
                 if (active && (playing || finished)) {
                     player.seekTo(loopStartMs)
                 }
+                if (active && player.isPlaying) nextDelayMs = LOOP_POLL_MS
                 // A stop at the end of a track that is not the last one never reaches
                 // STATE_ENDED, so watch for it here when the app must also close.
                 if (stopAfterTrackEnd && closeAfterSleepStop) {
@@ -80,14 +84,11 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
                 if (player.isPlaying) {
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastResumeSaveAt >= POSITION_SAVE_INTERVAL_MS) {
-                        lastResumeSaveAt = now
-                        saveResumeState(player)
-                    }
+                    nextDelayMs = minOf(nextDelayMs, PLAYBACK_POLL_MS)
+                    saveResumeState(player)
                 }
             }
-            handler.postDelayed(this, LOOP_POLL_MS)
+            handler.postDelayed(this, nextDelayMs)
         }
     }
 
@@ -101,12 +102,19 @@ class PlaybackService : MediaSessionService() {
         val pos = player.currentPosition.coerceAtLeast(0L)
         val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         // A track played to within a few seconds of its end counts as finished.
-        android.util.Log.d("MediaAnvilSave", "save id=$id pos=$pos dur=$duration")
-        if (pos >= duration - 15_000L) preferences.setPlaybackPosition(id, -1L)
-        else if (pos > 3_000L) preferences.setPlaybackPosition(id, pos)
+        val savedPosition = when {
+            pos >= duration - 15_000L -> -1L
+            pos > 3_000L -> pos
+            else -> -1L
+        }
         val uris = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
-        preferences.lastQueueUris = org.json.JSONArray(uris).toString()
-        preferences.lastQueueIndex = player.currentMediaItemIndex
+        preferences.savePlaybackSnapshot(
+            uri = id,
+            positionMs = savedPosition,
+            queueUris = uris,
+            queueIndex = player.currentMediaItemIndex,
+            synchronous = force,
+        )
     }
 
     /** Runs the pending "stop after this track" work exactly once. */
@@ -190,8 +198,8 @@ class PlaybackService : MediaSessionService() {
             }
         })
         restoreLastQueue()
-        // The ticker doubles as the periodic position saver, so it runs always.
-        handler.postDelayed(loopTicker, LOOP_POLL_MS)
+        // The ticker slows down while idle and only uses the fast cadence for A/B looping.
+        handler.postDelayed(loopTicker, IDLE_POLL_MS)
         mediaSession = MediaSession.Builder(this, player)
             .setMediaButtonPreferences(notificationButtons())
             .setCallback(object : MediaSession.Callback {
@@ -295,14 +303,12 @@ class PlaybackService : MediaSessionService() {
 
     /** Rebuilds the last queue (paused) after a reboot or process death. */
     private fun restoreLastQueue() {
-        android.util.Log.d("MediaAnvilRestore", "restore called, resume=${preferences.resumePlayback} uris=${preferences.lastQueueUris.take(60)} index=${preferences.lastQueueIndex}")
         if (!preferences.resumePlayback) return
         val uris = runCatching {
             val array = org.json.JSONArray(preferences.lastQueueUris)
             (0 until array.length()).map { array.getString(it) }
         }.getOrDefault(emptyList())
         val savedIndex = preferences.lastQueueIndex
-        android.util.Log.d("MediaAnvilSave", "restore uris=$uris index=$savedIndex")
         if (uris.isEmpty() || savedIndex !in uris.indices) return
         Thread {
             val metadata = mutableMapOf<String, Triple<String, String?, String?>>()
@@ -368,7 +374,6 @@ class PlaybackService : MediaSessionService() {
                 if (items.isEmpty()) return@post
                 val start = restoredIndex.coerceIn(0, items.size - 1)
                 val savedPos = preferences.playbackPositionFor(uris[savedIndex.coerceAtLeast(0)])
-                android.util.Log.d("MediaAnvilRestore", "restoring ${items.size} items at $start pos=$savedPos")
                 // Read the stored loop before setMediaItems: that call fires a media item
                 // transition, and the transition listener clears the stored markers.
                 val storedLoopUri = preferences.loopTrackUri
@@ -484,7 +489,7 @@ class PlaybackService : MediaSessionService() {
         preferences.loopTrackUri = ""
         preferences.loopStartMs = -1L
         preferences.loopEndMs = -1L
-        // The ticker stays scheduled: it also persists the playback position.
+        // The ticker stays scheduled at a low idle cadence for the sleep timer.
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
@@ -494,6 +499,7 @@ class PlaybackService : MediaSessionService() {
         if (::preferences.isInitialized) preferences.unregisterChangeListener(preferencesListener)
         clearLoop()
         mediaSession?.run {
+            saveResumeState(player, force = true)
             player.release()
             release()
         }
@@ -510,6 +516,8 @@ class PlaybackService : MediaSessionService() {
         const val COMMAND_STOP_AFTER_OFF = "com.imankoppai.mediaanvil.STOP_AFTER_OFF"
         private const val DOUBLE_PRESS_WINDOW_MS = 350L
         private const val LOOP_POLL_MS = 250L
-        private const val POSITION_SAVE_INTERVAL_MS = 5_000L
+        private const val PLAYBACK_POLL_MS = 1_000L
+        private const val IDLE_POLL_MS = 5_000L
+        private const val POSITION_SAVE_INTERVAL_MS = 15_000L
     }
 }

@@ -52,6 +52,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -70,13 +71,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.Player
 import com.imankoppai.mediaanvil.R
 import com.imankoppai.mediaanvil.model.AudioTrack
 import com.imankoppai.mediaanvil.model.TrackGroup
 import com.imankoppai.mediaanvil.subtitles.PreviewLyrics
 import com.imankoppai.mediaanvil.subtitles.SubtitleLoader
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private val libraryTabs = listOf(
@@ -89,7 +90,7 @@ private enum class MusicView { Songs, Albums, Artists }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LibraryPage(
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: androidx.media3.session.MediaController?,
     onRequestStorageAccess: () -> Unit,
     onOpenPlayer: () -> Unit,
@@ -101,6 +102,13 @@ internal fun LibraryPage(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         val uri = result.data?.data ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
         val folder = com.imankoppai.mediaanvil.data.DeviceAudioLibrary.treeUriToRelativeFolder(uri)
         if (folder != null) {
             library.preferences.scanFolders = library.preferences.scanFolders + folder
@@ -120,21 +128,25 @@ internal fun LibraryPage(
     var musicView by remember { mutableStateOf(MusicView.Songs) }
     var openGroup by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(controller) {
-        while (true) {
-            delay(500)
-            controller?.let { player ->
-                isPlaying = player.isPlaying
-                // The player queue may be a filtered subset (group, search,
-                // album groups, shuffle order); map by media id instead of
-                // treating its index as an index into the full track list.
-                val currentId = player.currentMediaItem?.mediaId
-                val mapped = currentId?.let { id -> library.tracks.indexOfFirst { it.uri.toString() == id } } ?: -1
-                if (mapped >= 0) {
-                    library.selectedIndex = mapped
-                }
-            }
+    fun syncPlaybackState(player: Player) {
+        isPlaying = player.isPlaying
+        // The player queue may be a filtered subset (group, search,
+        // album groups, shuffle order); map by media id instead of
+        // treating its index as an index into the full track list.
+        val currentId = player.currentMediaItem?.mediaId
+        val mapped = currentId?.let { id -> library.tracks.indexOfFirst { it.uri.toString() == id } } ?: -1
+        if (mapped >= 0) library.selectedIndex = mapped
+    }
+
+    DisposableEffect(controller, library.tracks) {
+        val player = controller
+        if (player == null) return@DisposableEffect onDispose { }
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) = syncPlaybackState(player)
         }
+        syncPlaybackState(player)
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
 
     var sortMode by remember { mutableStateOf(library.preferences.librarySort) }
@@ -546,7 +558,7 @@ private fun TopBar(
 
 @Composable
 private fun TrackGroupView(
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: androidx.media3.session.MediaController?,
     openGroupId: String?,
     onOpenGroup: (String?) -> Unit,
@@ -820,7 +832,7 @@ private fun GroupBrowser(
     openGroup: String?,
     onOpenGroup: (String?) -> Unit,
     groupIcon: ImageVector,
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: androidx.media3.session.MediaController?,
     onEditTrack: (AudioTrack) -> Unit,
 ) {
@@ -1001,7 +1013,7 @@ private fun TrackRow(
 }
 
 private fun removeTrackFromPlayer(
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: androidx.media3.session.MediaController?,
     track: AudioTrack,
 ) {
@@ -1158,7 +1170,7 @@ internal fun formatTime(milliseconds: Long): String {
 
 
 internal fun playFromLibrary(
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: androidx.media3.session.MediaController?,
     index: Int,
     queue: List<AudioTrack>,

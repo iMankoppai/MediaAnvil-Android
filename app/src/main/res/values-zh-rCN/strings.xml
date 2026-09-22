@@ -4,7 +4,7 @@
     <string name="empty_folder_hint">所选文件夹中没有找到受支持的音频，可在下方添加或更换文件夹。</string>
     <string name="empty_go_settings">选择文件夹</string>
     <string name="empty_no_audio_hint">手机中没有找到受支持的音频文件。</string>
-    <string name="storage_access_hint">授予存储访问权限后，将自动扫描手机中的受支持音频。</string>
+    <string name="storage_access_hint">MediaAnvil 需要存储访问权限来扫描本地音频、在音频旁保存外挂歌词，以及编辑歌名和歌手。数据只在本机处理，并且仅在你继续后申请权限。</string>
     <string name="no_tracks">没有找到支持的音频文件。</string>
     <string name="no_lyrics">没有找到匹配的外挂歌词或字幕</string>
     <string name="play">播放</string>

@@ -50,7 +50,7 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TagEditorPage(
-    library: LibraryState,
+    library: LibraryViewModel,
     controller: MediaController?,
     track: AudioTrack,
     onBack: () -> Unit,

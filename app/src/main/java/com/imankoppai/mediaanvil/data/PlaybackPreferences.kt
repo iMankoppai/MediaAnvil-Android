@@ -158,9 +158,26 @@ class PlaybackPreferences(context: Context) {
         runCatching {
             val root = JSONObject(playbackPositions)
             if (positionMs > 0L) root.put(uri, positionMs) else root.remove(uri)
-            // commit(): a force-stop can kill a pending apply() and lose the
-            // last position, so this one must land on disk synchronously.
-            preferences.edit().putString("playback_positions", root.toString()).commit()
+            preferences.edit().putString("playback_positions", root.toString()).apply()
+        }
+    }
+
+    /** Saves the resume position and queue in one disk transaction. */
+    fun savePlaybackSnapshot(
+        uri: String,
+        positionMs: Long,
+        queueUris: List<String>,
+        queueIndex: Int,
+        synchronous: Boolean,
+    ) {
+        runCatching {
+            val positions = JSONObject(playbackPositions)
+            if (positionMs > 0L) positions.put(uri, positionMs) else positions.remove(uri)
+            val editor = preferences.edit()
+                .putString("playback_positions", positions.toString())
+                .putString("last_queue_uris", JSONArray(queueUris).toString())
+                .putInt("last_queue_index", queueIndex)
+            if (synchronous) editor.commit() else editor.apply()
         }
     }
 
@@ -168,14 +185,14 @@ class PlaybackPreferences(context: Context) {
     var lastQueueUris: String
         get() = preferences.getString("last_queue_uris", "[]") ?: "[]"
         set(value) {
-            preferences.edit().putString("last_queue_uris", value).commit()
+            preferences.edit().putString("last_queue_uris", value).apply()
         }
 
     /** Index into lastQueueUris that was current when playback last stopped. */
     var lastQueueIndex: Int
         get() = preferences.getInt("last_queue_index", -1)
         set(value) {
-            preferences.edit().putInt("last_queue_index", value).commit()
+            preferences.edit().putInt("last_queue_index", value).apply()
         }
 
     /** Epoch-ms of the last automatic update check, throttling it to once a day. */

@@ -4,7 +4,7 @@
     <string name="empty_folder_hint">No supported audio was found in the selected folders. Add or change them below.</string>
     <string name="empty_go_settings">Choose folders</string>
     <string name="empty_no_audio_hint">No supported audio files were found on this device.</string>
-    <string name="storage_access_hint">Grant storage access and supported audio on the device is scanned automatically.</string>
+    <string name="storage_access_hint">MediaAnvil needs broad storage access to scan local audio, save sidecar lyrics beside it, and edit title/artist tags. Access stays on this device and is requested only after you continue.</string>
     <string name="no_tracks">No supported audio files were found.</string>
     <string name="no_lyrics">No matching sidecar lyrics or subtitles</string>
     <string name="play">Play</string>

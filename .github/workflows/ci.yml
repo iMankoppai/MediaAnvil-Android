@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-java@v4
         with:
@@ -27,5 +27,23 @@ jobs:
           yes | "$SDKM" --licenses >/dev/null
           "$SDKM" "platforms;android-36" "build-tools;36.0.0" >/dev/null
 
-      - name: Unit tests and debug build
-        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: Unit tests, lint, and debug build
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-reports
+          path: |
+            app/build/reports/lint-results-debug.*
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaAnvil-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

@@ -18,6 +18,10 @@ MediaAnvil Android 是面向本地 ASMR、广播剧、有声内容和音乐文�
 
 音频文件不会上传。在线歌词搜索会把当前歌曲的标题和歌手发送给 LRCLIB；选择结果后只在音频旁写入一个外挂 LRC 文件。除用户主动保存的歌名和歌手外，Android 版不会改动音频数据或其他标签。
 
+## 存储权限说明
+
+MediaAnvil Android 仅通过 GitHub 发布。应用需要“所有文件访问”来扫描分散在共享存储中的本地音频、在原音频目录旁读写外挂歌词，并安全替换用户明确要求修改的音频标签。应用首次启动不会直接跳转系统授权页，而是在媒体库为空时说明用途，并由用户主动继续。通过系统文件夹选择器授予的目录访问权限会被持久保存。应用不会上传音频文件，也不会删除原始音频。
+
 ## 界面结构
 
 - **媒体**：浏览、搜索、分组和选择歌曲。
@@ -53,7 +57,7 @@ app/build/outputs/apk/debug/app-debug.apk
 将 `signing.properties.example` 复制为 `signing.properties`，填写长期保存的 JKS 路径、密码和别名后运行：
 
 ```text
-gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
+gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
 ```
 
 真实的 `signing.properties`、JKS 和密码均不得提交。GitHub 发布工作流使用以下仓库 Secrets 构建同一签名的 Android APK，并将 APK 与 SHA-256 一起加入 Release：
@@ -63,10 +67,19 @@ gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
+配置一次 Secrets 后，创建并推送与 `versionName` 一致的标签即可发布，例如 V1.02 使用：
+
+```text
+git tag v1.02
+git push origin v1.02
+```
+
+工作流会先运行 Release 单元测试和 Lint，验证 APK 签名及标签版本，再创建 GitHub Release。应用内更新仅在 Release 同时包含 APK 和对应的 `.sha256` 文件时允许下载安装；校验失败的文件不会交给系统安装器。
+
 ## 主要技术
 
 - Kotlin 2.3.21
-- Jetpack Compose BOM 2025.08.00
+- Jetpack Compose BOM 2026.06.01
 - Android Gradle Plugin 9.4.0
-- Media3 1.11.0
+- Media3 1.11.1
 - minSdk 26 / targetSdk 36

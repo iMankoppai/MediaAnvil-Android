@@ -1,7 +1,10 @@
 package com.imankoppai.mediaanvil.ui
 
-import android.content.Context
+import android.app.Application
 import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.core.net.toUri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -13,16 +16,15 @@ import com.imankoppai.mediaanvil.data.PlaybackPreferences
 import com.imankoppai.mediaanvil.data.ScannedFile
 import com.imankoppai.mediaanvil.model.AudioTrack
 import com.imankoppai.mediaanvil.model.TrackGroup
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Shared folder library state used by both the playback and tag editor pages. */
-class LibraryState(context: Context, private val scope: CoroutineScope) {
-    private val appContext = context.applicationContext
+/** Lifecycle-aware library state shared by playback, settings, and tag editing. */
+class LibraryViewModel(application: Application) : AndroidViewModel(application) {
+    private val appContext = application.applicationContext
 
     val preferences = PlaybackPreferences(appContext)
 
@@ -30,7 +32,7 @@ class LibraryState(context: Context, private val scope: CoroutineScope) {
         private set
     var files by mutableStateOf<LibraryScan?>(null)
         private set
-    var selectedIndex by mutableStateOf(-1)
+    var selectedIndex by mutableIntStateOf(-1)
     var loading by mutableStateOf(false)
         private set
     var message by mutableStateOf<String?>(null)
@@ -226,7 +228,7 @@ class LibraryState(context: Context, private val scope: CoroutineScope) {
         loading = !quiet
         if (!quiet) message = null
         val allowedFolders = allowedScanFolders()
-        scope.launch {
+        viewModelScope.launch {
             val previousUri = tracks.getOrNull(selectedIndex)?.uri
             val result = withContext(Dispatchers.IO) {
                 runCatching { DeviceAudioLibrary.scan(appContext, allowedFolders) }
@@ -325,7 +327,7 @@ class LibraryState(context: Context, private val scope: CoroutineScope) {
     fun maybeCheckForUpdate() {
         val now = System.currentTimeMillis()
         if (now - preferences.updateLastCheckAt < UPDATE_CHECK_INTERVAL_MS) return
-        scope.launch {
+        viewModelScope.launch {
             val release = withContext(Dispatchers.IO) {
                 runCatching { com.imankoppai.mediaanvil.update.AppUpdateChecker.fetchLatest() }.getOrNull()
             } ?: return@launch
@@ -344,13 +346,18 @@ class LibraryState(context: Context, private val scope: CoroutineScope) {
         if (updateProgress >= 0) return
         updateProgress = 0
         updateFailed = false
-        scope.launch {
+        viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     com.imankoppai.mediaanvil.update.AppUpdateInstaller.downloadApk(
                         appContext,
                         release.apkUrl,
-                    ) { percent -> updateProgress = percent }
+                        release.sha256Url,
+                    ) { percent ->
+                        viewModelScope.launch {
+                            if (updateProgress in 0..99) updateProgress = percent
+                        }
+                    }
                 }
             }
             result.onSuccess {
@@ -380,7 +387,7 @@ class LibraryState(context: Context, private val scope: CoroutineScope) {
     }
 
     companion object {
-        private val DEVICE_LIBRARY_URI = Uri.parse("mediaanvil://device-library")
+        private val DEVICE_LIBRARY_URI = "mediaanvil://device-library".toUri()
         private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 }
