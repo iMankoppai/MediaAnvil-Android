@@ -13,7 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -47,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.media3.session.MediaController
@@ -55,7 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.imankoppai.mediaanvil.R
 import com.imankoppai.mediaanvil.playback.PlaybackService
 
-private enum class MainTab(val titleRes: Int) {
+internal enum class MainTab(val titleRes: Int) {
     Media(R.string.tab_media),
     Player(R.string.tab_player),
     Settings(R.string.tab_settings),
@@ -248,70 +250,8 @@ fun MediaAnvilApp() {
                 bottomBar = {
                     // A tablet in portrait has room for a taller bar with larger destinations.
                     val largeBar = maxWidth >= RailLayoutMinWidth
-                    if (editingTrack == null) NavigationBar(
-                        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.height(if (largeBar) 148.dp else 104.dp),
-                    ) {
-                        Row(Modifier.fillMaxWidth()) {
-                            MainTab.entries.forEach { entry ->
-                                val selected = tab == entry
-                                val icon = tabIcon(entry)
-                                Box(
-                                    // The whole third is the touch target, not just the pill.
-                                    Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clickable { tab = entry },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Surface(
-                                        shape = if (largeBar) {
-                                            androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
-                                        } else {
-                                            CircleShape
-                                        },
-                                        color = if (selected) {
-                                            androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                        } else {
-                                            androidx.compose.ui.graphics.Color.Transparent
-                                        },
-                                        modifier = Modifier.size(
-                                            width = if (largeBar) 112.dp else 68.dp,
-                                            height = if (largeBar) 112.dp else 68.dp,
-                                        ),
-                                    ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                                        ) {
-                                            Icon(
-                                                icon,
-                                                contentDescription = null,
-                                                tint = if (selected) {
-                                                    androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer
-                                                } else {
-                                                    androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-                                                },
-                                                modifier = Modifier.size(if (largeBar) 38.dp else 28.dp),
-                                            )
-                                            Text(
-                                                stringResource(entry.titleRes),
-                                                style = if (largeBar) {
-                                                    androidx.compose.material3.MaterialTheme.typography.titleMedium
-                                                } else {
-                                                    androidx.compose.material3.MaterialTheme.typography.labelMedium
-                                                },
-                                                color = if (selected) {
-                                                    androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer
-                                                } else {
-                                                    androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if (editingTrack == null) {
+                        BottomNavigation(tab = tab, onSelect = { tab = it }, largeBar = largeBar)
                     }
                 },
             ) { padding ->
@@ -322,6 +262,81 @@ fun MediaAnvilApp() {
                         .consumeWindowInsets(padding),
                 ) {
                     pageContent()
+                }
+            }
+        }
+    }
+}
+
+/** Phone/tablet navigation kept separate so its state contract can be tested in isolation. */
+@Composable
+internal fun BottomNavigation(tab: MainTab, onSelect: (MainTab) -> Unit, largeBar: Boolean) {
+    NavigationBar(
+        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+        modifier = Modifier.height(if (largeBar) 148.dp else 104.dp),
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            MainTab.entries.forEach { entry ->
+                val selected = tab == entry
+                val icon = tabIcon(entry)
+                Box(
+                    // The whole third is the touch target, not just the pill.
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .testTag(entry.testTag)
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            onClick = { onSelect(entry) },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Surface(
+                        shape = if (largeBar) {
+                            androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
+                        } else {
+                            CircleShape
+                        },
+                        color = if (selected) {
+                            androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        } else {
+                            androidx.compose.ui.graphics.Color.Transparent
+                        },
+                        modifier = Modifier.size(
+                            width = if (largeBar) 112.dp else 68.dp,
+                            height = if (largeBar) 112.dp else 68.dp,
+                        ),
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                        ) {
+                            Icon(
+                                icon,
+                                contentDescription = null,
+                                tint = if (selected) {
+                                    androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(if (largeBar) 38.dp else 28.dp),
+                            )
+                            Text(
+                                stringResource(entry.titleRes),
+                                style = if (largeBar) {
+                                    androidx.compose.material3.MaterialTheme.typography.titleMedium
+                                } else {
+                                    androidx.compose.material3.MaterialTheme.typography.labelMedium
+                                },
+                                color = if (selected) {
+                                    androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -350,7 +365,12 @@ private fun RailNavigation(tab: MainTab, onSelect: (MainTab) -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .clickable { onSelect(entry) },
+                    .testTag(entry.testTag)
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = { onSelect(entry) },
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Surface(
@@ -392,3 +412,10 @@ private fun RailNavigation(tab: MainTab, onSelect: (MainTab) -> Unit) {
         }
     }
 }
+
+private val MainTab.testTag: String
+    get() = when (this) {
+        MainTab.Media -> UiTestTags.MediaTab
+        MainTab.Player -> UiTestTags.PlayerTab
+        MainTab.Settings -> UiTestTags.SettingsTab
+    }
