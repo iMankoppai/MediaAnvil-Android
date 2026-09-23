@@ -14,14 +14,13 @@ import com.imankoppai.mediaanvil.data.FavoriteTracks
 import com.imankoppai.mediaanvil.data.LibraryCache
 import com.imankoppai.mediaanvil.data.LibraryScan
 import com.imankoppai.mediaanvil.data.PlaybackPreferences
-import com.imankoppai.mediaanvil.data.ScannedFile
+import com.imankoppai.mediaanvil.data.SafStorage
 import com.imankoppai.mediaanvil.model.AudioTrack
 import com.imankoppai.mediaanvil.model.TrackGroup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /** Lifecycle-aware library state shared by playback, settings, and tag editing. */
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
@@ -45,14 +44,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     var sleepTimerEndAt by mutableStateOf<Long?>(null)
         private set
 
+    /**
+     * True when the media library can return audio rows. This needs only the audio
+     * read permission — never "all files access".
+     */
     fun hasStorageAccess(): Boolean =
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            android.os.Environment.isExternalStorageManager()
-        } else {
-            androidx.core.content.ContextCompat.checkSelfPermission(
-                appContext, android.Manifest.permission.READ_EXTERNAL_STORAGE,
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            appContext,
+            com.imankoppai.mediaanvil.data.DeviceAudioLibrary.readPermission,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     /** Mirrors [PlaybackPreferences.autoLoadLyrics] so open screens react immediately. */
     var autoLoadLyrics by mutableStateOf(preferences.autoLoadLyrics)
@@ -212,19 +212,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     val selectedTrack: AudioTrack? get() = tracks.getOrNull(selectedIndex)
 
-    fun attachLyrics(trackUri: Uri, lyricsFile: File) {
+    fun attachLyrics(trackUri: Uri, lyricsUri: Uri, extension: String) {
         val selectedUri = selectedTrack?.uri
         tracks = tracks.map { track ->
             if (track.uri == trackUri) {
-                track.copy(subtitleUri = Uri.fromFile(lyricsFile), subtitleExtension = lyricsFile.extension.lowercase())
+                track.copy(subtitleUri = lyricsUri, subtitleExtension = extension.lowercase())
             } else {
                 track
             }
         }
         selectedIndex = tracks.indexOfFirst { it.uri == selectedUri }
-        val currentFiles = files?.files.orEmpty()
-        files = LibraryScan(tracks, currentFiles)
-        LibraryCache.save(appContext, DEVICE_LIBRARY_URI, LibraryScan(tracks, currentFiles))
+        persistCurrentScan()
     }
 
     fun detachLyrics(trackUri: Uri) {
@@ -233,19 +231,31 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             if (track.uri == trackUri) track.copy(subtitleUri = null, subtitleExtension = null) else track
         }
         selectedIndex = tracks.indexOfFirst { it.uri == selectedUri }
-        val currentFiles = files?.files.orEmpty()
-        files = LibraryScan(tracks, currentFiles)
-        LibraryCache.save(appContext, DEVICE_LIBRARY_URI, LibraryScan(tracks, currentFiles))
+        persistCurrentScan()
     }
+
+    /** Keeps the cache in step after an in-place change such as a lyric or tag edit. */
+    private fun persistCurrentScan() {
+        files = LibraryScan(tracks)
+        LibraryCache.save(appContext, LibraryScan(tracks))
+    }
+
+    /**
+     * Finds the sidecar lyrics sitting beside a track by looking inside the folders the
+     * user granted. Without "all files access" the app cannot list an audio folder on
+     * its own, so this only returns a result once a grant covers the track's folder.
+     */
+    fun findSidecarLyrics(track: AudioTrack): Pair<Uri, String>? =
+        runCatching { SafStorage.findSubtitle(appContext, track) }.getOrNull()
 
     /** Show the cached library instantly, then refresh quietly in the background. */
     fun startup() {
         // A sleep timer armed before the screen was recreated is still running.
         refreshSleepTimer()
         val snapshot = LibraryCache.load(appContext)
-        if (snapshot != null && snapshot.treeUri == DEVICE_LIBRARY_URI) {
+        if (snapshot != null) {
             tracks = snapshot.tracks.map { record ->
-                com.imankoppai.mediaanvil.model.AudioTrack(
+                AudioTrack(
                     uri = record.uri,
                     fileName = record.fileName,
                     title = record.title,
@@ -254,13 +264,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     durationMs = record.durationMs,
                     subtitleUri = record.subtitleUri,
                     subtitleExtension = record.subtitleExtension,
-                    parentPath = record.parentPath,
+                    relativeFolder = record.relativeFolder,
                 )
             }.filterNot { it.uri.toString() in hiddenTrackUris }
-            files = LibraryScan(
-                tracks = emptyList(),
-                files = snapshot.files.map { ScannedFile(it.uri, it.name, it.parentPath) },
-            )
+            files = LibraryScan(tracks)
             if (!LibraryCache.isFresh(snapshot)) {
                 scanAll(quiet = true)
             }
@@ -290,15 +297,26 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             tracks = visibleResult.tracks
             selectedIndex = visibleResult.tracks.indexOfFirst { it.uri == previousUri }
             loading = false
+            // Sidecar lyrics are located inside user-granted folders; without a grant
+            // the track simply shows no lyrics instead of failing the scan.
+            tracks = attachKnownSidecars(tracks)
             // Keep the complete scan in cache; hidden tracks are filtered only in the UI state.
             // This makes restoring them reliable even if the app closes during the restore scan.
-            LibraryCache.save(appContext, DEVICE_LIBRARY_URI, result)
+            LibraryCache.save(appContext, result)
             if (visibleResult.tracks.isEmpty() && !quiet) {
                 message = appContext.getString(com.imankoppai.mediaanvil.R.string.no_tracks)
             }
             onLoaded(visibleResult.tracks.size)
         }
     }
+
+    /** Fills in sidecar lyrics for tracks whose folder the user has already granted. */
+    private fun attachKnownSidecars(source: List<AudioTrack>): List<AudioTrack> =
+        source.map { track ->
+            if (track.subtitleUri != null) return@map track
+            val found = findSidecarLyrics(track) ?: return@map track
+            track.copy(subtitleUri = found.first, subtitleExtension = found.second)
+        }
 
     /** Reflect an in-place tag edit immediately; MediaStore metadata lags behind. */
     fun applyTagEdit(uri: Uri, title: String, artist: String?) {
@@ -312,10 +330,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
             LibraryCache.save(
                 appContext,
-                DEVICE_LIBRARY_URI,
                 LibraryScan(
                     tracks = updatedTracks.map { record ->
-                        com.imankoppai.mediaanvil.model.AudioTrack(
+                        AudioTrack(
                             uri = record.uri,
                             fileName = record.fileName,
                             title = record.title,
@@ -324,18 +341,16 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             durationMs = record.durationMs,
                             subtitleUri = record.subtitleUri,
                             subtitleExtension = record.subtitleExtension,
-                            parentPath = record.parentPath,
+                            relativeFolder = record.relativeFolder,
                         )
                     },
-                    files = emptyList(),
                 ),
             )
         }
-        val path = tracks.firstOrNull { it.uri == uri }?.let { it.parentPath + "/" + it.fileName }
-        if (path != null) {
-            runCatching {
-                android.media.MediaScannerConnection.scanFile(appContext, arrayOf(path), null, null)
-            }
+        // The media library caches its own metadata row; ask it to re-read the file so a
+        // later scan reports the edited title instead of the stale one.
+        runCatching {
+            android.media.MediaScannerConnection.scanFile(appContext, arrayOf(uri.toString()), null, null)
         }
     }
 
@@ -436,7 +451,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     companion object {
-        private val DEVICE_LIBRARY_URI = "mediaanvil://device-library".toUri()
         private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 }

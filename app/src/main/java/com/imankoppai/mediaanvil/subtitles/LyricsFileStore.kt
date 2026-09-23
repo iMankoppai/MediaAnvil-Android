@@ -1,58 +1,42 @@
 package com.imankoppai.mediaanvil.subtitles
 
+import android.content.Context
+import android.net.Uri
+import com.imankoppai.mediaanvil.data.SafStorage
 import com.imankoppai.mediaanvil.model.AudioTrack
-import java.io.File
 import java.nio.charset.StandardCharsets
 
-/** Writes a selected online result beside its audio file without touching the audio itself. */
+/**
+ * Writes a sidecar lyric file beside its audio file without touching the audio itself.
+ *
+ * Access goes through the folder the user granted with the system picker, so the app
+ * no longer needs "all files access". Without a matching grant the caller gets
+ * `folder_permission_required` and must ask the user to choose the music folder.
+ */
 object LyricsFileStore {
-    fun save(track: AudioTrack, lyrics: String): File {
-        return saveText(track, lyrics, "lrc")
-    }
+    const val FOLDER_PERMISSION_REQUIRED = "folder_permission_required"
 
-    fun import(track: AudioTrack, bytes: ByteArray, extension: String): File {
+    fun save(context: Context, track: AudioTrack, lyrics: String): Uri =
+        saveText(context, track, lyrics, "lrc")
+
+    fun import(context: Context, track: AudioTrack, bytes: ByteArray, extension: String): Uri {
         val cleanExtension = extension.lowercase().takeIf { it in setOf("lrc", "srt", "vtt") }
             ?: error("unsupported_lyrics")
-        return saveText(track, SubtitleLoader.decode(bytes), cleanExtension)
+        return saveText(context, track, SubtitleLoader.decode(bytes), cleanExtension)
     }
 
-    private fun saveText(track: AudioTrack, lyrics: String, extension: String): File {
-        val parent = File(track.parentPath)
-        check(track.parentPath.isNotBlank() && parent.isDirectory) { "audio_folder_unavailable" }
-        val baseName = track.fileName.substringBeforeLast('.', track.fileName)
-        val target = File(parent, "$baseName.$extension")
-        val temporary = File(parent, ".$baseName.${System.nanoTime()}.$extension.tmp")
-        val backup = File(parent, ".$baseName.${System.nanoTime()}.$extension.bak")
-        try {
-            temporary.outputStream().buffered().use { output ->
-                output.write(lyrics.trim().toByteArray(StandardCharsets.UTF_8))
-                output.write('\n'.code)
-            }
-            check(temporary.length() > 0L) { "empty_lyrics" }
-            val hadOriginal = target.exists()
-            if (hadOriginal) check(target.renameTo(backup)) { "lyrics_backup_failed" }
-            try {
-                check(temporary.renameTo(target)) { "lyrics_replace_failed" }
-            } catch (failure: Throwable) {
-                if (hadOriginal) backup.renameTo(target)
-                throw failure
-            }
-            backup.delete()
-            return target
-        } finally {
-            temporary.delete()
-            if (!target.exists() && backup.exists()) backup.renameTo(target)
-        }
+    private fun saveText(context: Context, track: AudioTrack, lyrics: String, extension: String): Uri {
+        val body = lyrics.trim().toByteArray(StandardCharsets.UTF_8) + '\n'.code.toByte()
+        check(body.isNotEmpty()) { "empty_lyrics" }
+        return SafStorage.writeSubtitle(context, track, body, extension)
     }
 
-    fun delete(track: AudioTrack): Boolean {
+    /** True when a granted folder already covers this track, so saving can succeed. */
+    fun canWrite(context: Context, track: AudioTrack): Boolean =
+        SafStorage.findGrant(context, track.relativeFolder) is SafStorage.FolderAccess.Granted
+
+    fun delete(context: Context, track: AudioTrack): Boolean {
         val uri = track.subtitleUri ?: return false
-        check(uri.scheme == "file") { "lyrics_not_a_file" }
-        val file = File(checkNotNull(uri.path)).canonicalFile
-        val audioFolder = File(track.parentPath).canonicalFile
-        check(file.parentFile == audioFolder && file.extension.lowercase() in setOf("lrc", "srt", "vtt")) {
-            "unsafe_lyrics_path"
-        }
-        return !file.exists() || file.delete()
+        return SafStorage.deleteSubtitle(context, uri, track.fileName)
     }
 }

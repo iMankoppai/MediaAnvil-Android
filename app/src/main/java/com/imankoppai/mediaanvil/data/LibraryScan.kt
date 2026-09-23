@@ -1,8 +1,9 @@
 package com.imankoppai.mediaanvil.data
 
-import android.net.Uri
 import com.imankoppai.mediaanvil.model.AudioTrack
 
-data class ScannedFile(val uri: Uri, val name: String, val parentPath: String)
+/** A completed media-library scan. */
+data class LibraryScan(val tracks: List<AudioTrack>, val files: List<ScannedFile> = emptyList())
 
-data class LibraryScan(val tracks: List<AudioTrack>, val files: List<ScannedFile>)
+/** Retained for the cache/backup shape; the media-library scan no longer lists raw files. */
+data class ScannedFile(val uri: android.net.Uri, val name: String, val relativeFolder: String)

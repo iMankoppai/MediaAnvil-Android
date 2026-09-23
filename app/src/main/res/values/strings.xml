@@ -1,10 +1,10 @@
 <resources>
     <string name="app_name">MediaAnvil</string>
-    <string name="storage_access_action">Grant storage access</string>
+    <string name="storage_access_action">Allow access to audio</string>
     <string name="empty_folder_hint">No supported audio was found in the selected folders. Add or change them below.</string>
     <string name="empty_go_settings">Choose folders</string>
     <string name="empty_no_audio_hint">No supported audio files were found on this device.</string>
-    <string name="storage_access_hint">MediaAnvil needs broad storage access to scan local audio, save sidecar lyrics beside it, and edit title/artist tags. Access stays on this device and is requested only after you continue.</string>
+    <string name="storage_access_hint">MediaAnvil reads local audio through the system media library, so it only needs permission to read audio files. To save lyrics or edit tags it will ask you to pick the folder once. Nothing is uploaded.</string>
     <string name="no_tracks">No supported audio files were found.</string>
     <string name="no_lyrics">No matching sidecar lyrics or subtitles</string>
     <string name="play">Play</string>
@@ -161,6 +161,7 @@
     <string name="lyrics_deleted">Sidecar lyrics deleted; you can search again</string>
     <string name="lyrics_delete_failed">Could not delete the sidecar lyric file</string>
     <string name="lyrics_imported">Local lyrics copied beside the audio file</string>
+    <string name="lyrics_need_folder">Choose the folder that holds this audio so lyrics can be saved beside it.</string>
     <string name="lyrics_import_failed">Could not read or save the selected lyrics; only LRC, SRT and VTT are supported</string>
     <string name="online_lyrics_windows_hint">If no result is available, transcription and translation can be handled in the Windows version.</string>
     <string name="tag_editor_title">Edit audio tags</string>
@@ -171,6 +172,7 @@
     <string name="tag_saved">Tags saved</string>
     <string name="tag_read_failed">Could not read the current tags</string>
     <string name="tag_save_failed">Could not save tags</string>
+    <string name="tag_write_permission_denied">Android did not allow writing this file. Tags were not changed.</string>
     <string name="tag_recovery_kept"> A copy of the original file was kept in app-private storage (tag-edit-recovery); nothing is lost.</string>
     <string name="tag_unsupported_format">This format does not support tag writing here. Raw AAC is read-only.</string>
     <string name="settings_about_section">About</string>

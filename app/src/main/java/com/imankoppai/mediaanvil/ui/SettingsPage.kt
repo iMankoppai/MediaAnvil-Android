@@ -252,13 +252,9 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
             ActivityResultContracts.StartActivityForResult(),
         ) { result ->
             val uri = result.data?.data ?: return@rememberLauncherForActivityResult
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
-            }
+            // The grant is what lets lyrics be saved and tags be written inside this
+            // folder now that the app no longer holds "all files access".
+            com.imankoppai.mediaanvil.data.SafStorage.takePersistablePermission(context, uri)
             val folder = com.imankoppai.mediaanvil.data.DeviceAudioLibrary.treeUriToRelativeFolder(uri)
             if (folder != null && folder !in scanFolders) {
                 updateScanFolders(scanFolders + folder)

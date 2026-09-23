@@ -1,5 +1,7 @@
 package com.imankoppai.mediaanvil.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.session.MediaController
 import com.imankoppai.mediaanvil.R
 import com.imankoppai.mediaanvil.data.DocumentOps
+import com.imankoppai.mediaanvil.data.SafStorage
 import com.imankoppai.mediaanvil.model.AudioTrack
 import com.imankoppai.mediaanvil.tags.TagIO
 import kotlinx.coroutines.Dispatchers
@@ -86,10 +89,8 @@ internal fun TagEditorPage(
         loading = false
     }
 
-    fun save() {
-        if (!writable || saving) return
-        saving = true
-        message = null
+    /** Writes the edited copy back over the audio file. Callers own the [saving] flag. */
+    fun performSave() {
         controller?.pause()
         scope.launch {
             var recoveryKept = false
@@ -141,6 +142,49 @@ internal fun TagEditorPage(
                 },
             )
         }
+    }
+
+    /** Resolved up front so the click handler never queries resources mid-composition. */
+    val writeDeniedText = stringResource(R.string.tag_write_permission_denied)
+    val saveFailedText = stringResource(R.string.tag_save_failed)
+
+    // From API 30 the system requires an explicit, user-approved write grant before an
+    // app may replace a media file, even one it can already read.
+    val writeRequestLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            SafStorage.rememberMediaWriteAccess(track.uri)
+            performSave()
+        } else {
+            saving = false
+            message = writeDeniedText
+        }
+    }
+
+    fun save() {
+        if (!writable || saving) return
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+            !SafStorage.hasMediaWriteAccess(track.uri)
+        ) {
+            saving = true
+            message = null
+            val request = runCatching {
+                android.provider.MediaStore.createWriteRequest(context.contentResolver, listOf(track.uri))
+            }.getOrNull()
+            if (request == null) {
+                saving = false
+                message = saveFailedText
+                return
+            }
+            writeRequestLauncher.launch(
+                androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build(),
+            )
+            return
+        }
+        saving = true
+        message = null
+        performSave()
     }
 
     Scaffold(

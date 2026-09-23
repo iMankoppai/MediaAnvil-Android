@@ -677,26 +677,61 @@ private fun LyricsView(
     }
     var queryTitle by remember(track.uri) { mutableStateOf(track.title) }
     var queryArtist by remember(track.uri) { mutableStateOf(track.artist.orEmpty()) }
+
+    // Saving beside the audio needs the user to grant that folder once; there is no
+    // permission that grants a whole tree implicitly any more.
+    var pendingAfterGrant by remember(track.uri) { mutableStateOf<(() -> Unit)?>(null) }
+    val folderGrantLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val treeUri = result.data?.data
+        if (treeUri != null) {
+            com.imankoppai.mediaanvil.data.SafStorage.takePersistablePermission(context, treeUri)
+            library.rescan(quiet = true)
+        }
+        val action = pendingAfterGrant
+        pendingAfterGrant = null
+        action?.invoke()
+    }
+
+    /** Resolved during composition so the click handler never reads resources late. */
+    val needFolderText = stringResource(R.string.lyrics_need_folder)
+
+    /** Runs [action] once a granted folder covers this track, asking for one if needed. */
+    fun withFolderAccess(action: () -> Unit) {
+        if (LyricsFileStore.canWrite(context, track)) {
+            action()
+        } else {
+            statusMessage = needFolderText
+            pendingAfterGrant = action
+            folderGrantLauncher.launch(
+                com.imankoppai.mediaanvil.data.DeviceAudioLibrary.folderPickerIntent(context),
+            )
+        }
+    }
+
     val lyricsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val bytes = checkNotNull(context.contentResolver.openInputStream(uri)).use { it.readBytes() }
-                    val extension = uri.lastPathSegment.orEmpty().substringAfterLast('.', "").lowercase()
-                    LyricsFileStore.import(track, bytes, extension)
+        withFolderAccess {
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val bytes = checkNotNull(context.contentResolver.openInputStream(uri)).use { it.readBytes() }
+                        val extension = uri.lastPathSegment.orEmpty().substringAfterLast('.', "").lowercase()
+                        LyricsFileStore.import(context, track, bytes, extension)
+                    }
                 }
-            }
-            result.onSuccess { file ->
-                library.attachLyrics(track.uri, file)
-                cues = withContext(Dispatchers.IO) {
-                    PreviewLyrics.load(context, library.selectedTrack ?: track, true)
+                result.onSuccess { savedUri ->
+                    library.attachLyrics(track.uri, savedUri, savedUri.lastPathSegment.orEmpty().substringAfterLast('.', "lrc"))
+                    cues = withContext(Dispatchers.IO) {
+                        PreviewLyrics.load(context, library.selectedTrack ?: track, true)
+                    }
+                    managingLyrics = false
+                    statusMessage = null
+                    android.widget.Toast.makeText(context, R.string.lyrics_imported, android.widget.Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    statusMessage = context.getString(R.string.lyrics_import_failed)
                 }
-                managingLyrics = false
-                statusMessage = null
-                android.widget.Toast.makeText(context, R.string.lyrics_imported, android.widget.Toast.LENGTH_SHORT).show()
-            }.onFailure {
-                statusMessage = context.getString(R.string.lyrics_import_failed)
             }
         }
     }
@@ -729,26 +764,28 @@ private fun LyricsView(
 
     fun saveCandidate(candidate: OnlineLyricsCandidate) {
         if (savingId != null) return
-        savingId = candidate.id
-        statusMessage = null
-        scope.launch {
-            val saved = withContext(Dispatchers.IO) {
-                runCatching { LyricsFileStore.save(track, candidate.syncedLyrics) }
-            }
-            savingId = null
-            saved.onSuccess { file ->
-                library.attachLyrics(track.uri, file)
-                cues = PreviewLyrics.parseLrcTimeline(candidate.syncedLyrics)
-                candidates = emptyList()
-                previewCandidate = null
-                managingLyrics = false
-                android.widget.Toast.makeText(
-                    context,
-                    R.string.online_lyrics_saved,
-                    android.widget.Toast.LENGTH_SHORT,
-                ).show()
-            }.onFailure {
-                statusMessage = context.getString(R.string.online_lyrics_save_failed)
+        withFolderAccess {
+            savingId = candidate.id
+            statusMessage = null
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching { LyricsFileStore.save(context, track, candidate.syncedLyrics) }
+                }
+                savingId = null
+                saved.onSuccess { savedUri ->
+                    library.attachLyrics(track.uri, savedUri, "lrc")
+                    cues = PreviewLyrics.parseLrcTimeline(candidate.syncedLyrics)
+                    candidates = emptyList()
+                    previewCandidate = null
+                    managingLyrics = false
+                    android.widget.Toast.makeText(
+                        context,
+                        R.string.online_lyrics_saved,
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }.onFailure {
+                    statusMessage = context.getString(R.string.online_lyrics_save_failed)
+                }
             }
         }
     }
@@ -1132,7 +1169,7 @@ private fun LyricsView(
                     confirmDelete = false
                     scope.launch {
                         val deleted = withContext(Dispatchers.IO) {
-                            runCatching { LyricsFileStore.delete(track) }.getOrDefault(false)
+                            runCatching { LyricsFileStore.delete(context, track) }.getOrDefault(false)
                         }
                         if (deleted) {
                             library.detachLyrics(track.uri)

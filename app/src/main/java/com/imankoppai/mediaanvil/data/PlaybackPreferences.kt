@@ -2,6 +2,7 @@ package com.imankoppai.mediaanvil.data
 
 import android.content.Context
 import android.net.Uri
+import androidx.core.content.edit
 import com.imankoppai.mediaanvil.model.TrackGroup
 import org.json.JSONArray
 import org.json.JSONObject
@@ -289,8 +290,9 @@ class PlaybackPreferences(context: Context) {
     fun recordPlayed(uri: String, playedAt: Long = System.currentTimeMillis(), force: Boolean = false) {
         if (uri.isBlank()) return
         val updated = PlayHistory.record(playHistory(), uri, playedAt)
-        val editor = preferences.edit().putString("play_history", PlayHistory.encode(updated))
-        if (force) editor.commit() else editor.apply()
+        preferences.edit(commit = force) {
+            putString("play_history", PlayHistory.encode(updated))
+        }
     }
 
     /** Tracks hidden from the player library; the underlying documents are untouched. */

@@ -6,9 +6,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Persisted snapshot of the last folder scan so the library opens instantly;
- * a background rescan keeps it fresh afterwards. Only paths and tags are
- * cached — never audio bytes.
+ * Persisted snapshot of the last media-library scan so the library opens instantly;
+ * a background rescan keeps it fresh afterwards. Only paths and tags are cached —
+ * never audio bytes.
  */
 object LibraryCache {
     private const val FILE_NAME = "library_snapshot.json"
@@ -21,28 +21,19 @@ object LibraryCache {
         val artist: String?,
         val album: String?,
         val durationMs: Long,
-        val parentPath: String,
+        val relativeFolder: String,
         val subtitleUri: Uri?,
         val subtitleExtension: String?,
     )
 
-    data class FileRecord(
-        val uri: Uri,
-        val name: String,
-        val parentPath: String,
-    )
-
     data class Snapshot(
-        val treeUri: Uri,
         val tracks: List<TrackRecord>,
-        val files: List<FileRecord>,
         val savedAt: Long,
     )
 
-    fun save(context: Context, treeUri: Uri, scan: LibraryScan) {
+    fun save(context: Context, scan: LibraryScan) {
         runCatching {
             val root = JSONObject()
-                .put("treeUri", treeUri.toString())
                 .put("savedAt", System.currentTimeMillis())
             val tracks = JSONArray()
             scan.tracks.forEach { track ->
@@ -54,22 +45,12 @@ object LibraryCache {
                         .put("artist", track.artist.orEmpty())
                         .put("album", track.album.orEmpty())
                         .put("durationMs", track.durationMs)
-                        .put("parentPath", track.parentPath)
+                        .put("relativeFolder", track.relativeFolder)
                         .put("subtitleUri", track.subtitleUri?.toString().orEmpty())
                         .put("subtitleExtension", track.subtitleExtension.orEmpty()),
                 )
             }
             root.put("tracks", tracks)
-            val files = JSONArray()
-            scan.files.forEach { file ->
-                files.put(
-                    JSONObject()
-                        .put("uri", file.uri.toString())
-                        .put("name", file.name)
-                        .put("parentPath", file.parentPath),
-                )
-            }
-            root.put("files", files)
             context.cacheDir.mkdirs()
             val target = java.io.File(context.cacheDir, FILE_NAME)
             val tmp = java.io.File(context.cacheDir, "$FILE_NAME.tmp")
@@ -85,7 +66,6 @@ object LibraryCache {
         val file = java.io.File(context.cacheDir, FILE_NAME)
         if (!file.isFile) return null
         val root = JSONObject(file.readText())
-        val treeUri = Uri.parse(root.getString("treeUri"))
         val tracks = mutableListOf<TrackRecord>()
         val tracksArray = root.optJSONArray("tracks") ?: JSONArray()
         for (i in 0 until tracksArray.length()) {
@@ -98,28 +78,22 @@ object LibraryCache {
                 artist = item.optString("artist").ifEmpty { null },
                 album = item.optString("album").ifEmpty { null },
                 durationMs = item.optLong("durationMs"),
-                parentPath = item.optString("parentPath"),
+                // Snapshots written by V1.02 stored an absolute parentPath; the
+                // scanner re-derives a relative folder on the next refresh, so an
+                // unreadable legacy value simply falls back to the root folder.
+                relativeFolder = item.optString("relativeFolder").ifEmpty {
+                    legacyParentPathToRelative(item.optString("parentPath"))
+                },
                 subtitleUri = subtitleUri,
                 subtitleExtension = item.optString("subtitleExtension").ifEmpty { null },
             )
         }
-        val files = mutableListOf<FileRecord>()
-        val filesArray = root.optJSONArray("files") ?: JSONArray()
-        for (i in 0 until filesArray.length()) {
-            val item = filesArray.getJSONObject(i)
-            files += FileRecord(
-                uri = Uri.parse(item.getString("uri")),
-                name = item.getString("name"),
-                parentPath = item.optString("parentPath"),
-            )
-        }
-        Snapshot(
-            treeUri = treeUri,
-            tracks = tracks,
-            files = files,
-            savedAt = root.optLong("savedAt"),
-        )
+        Snapshot(tracks = tracks, savedAt = root.optLong("savedAt"))
     }.getOrNull()
+
+    /** Best-effort conversion of a V1.02 absolute parentPath into a relative folder. */
+    private fun legacyParentPathToRelative(parentPath: String): String =
+        if (parentPath.isBlank()) "" else DeviceAudioLibrary.relativeFolderFromAbsolute("$parentPath/x")
 
     fun isFresh(snapshot: Snapshot): Boolean =
         System.currentTimeMillis() - snapshot.savedAt < MAX_AGE_MS

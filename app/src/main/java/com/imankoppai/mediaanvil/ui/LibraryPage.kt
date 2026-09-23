@@ -115,13 +115,8 @@ internal fun LibraryPage(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         val uri = result.data?.data ?: return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        }
+        // Persist the grant so lyrics and tag edits keep working after a restart.
+        com.imankoppai.mediaanvil.data.SafStorage.takePersistablePermission(context, uri)
         val folder = com.imankoppai.mediaanvil.data.DeviceAudioLibrary.treeUriToRelativeFolder(uri)
         if (folder != null) {
             library.preferences.scanFolders = library.preferences.scanFolders + folder

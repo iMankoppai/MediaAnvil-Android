@@ -94,44 +94,25 @@ fun MediaAnvilApp() {
         }
     }
 
-    val legacyStoragePermission = rememberLauncherForActivityResult(
+    // The media library only needs the audio read permission; folder-scoped writes
+    // ask for a folder through the system picker instead of "all files access".
+    val audioPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { library.rescan() }
-    val allFilesPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) {
-        library.rescan()
-        // 从"所有文件访问"设置页返回后才申请通知权限，避免两个系统界面同时弹出。
-        requestNotificationAccess()
-    }
 
     fun requestStorageAccess() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                val appSettings = Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:${context.packageName}"),
-                )
-                runCatching { allFilesPermission.launch(appSettings) }
-                    .onFailure { allFilesPermission.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
-            } else {
-                library.rescan()
+        val needed = buildList {
+            val permission = com.imankoppai.mediaanvil.data.DeviceAudioLibrary.readPermission
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, permission) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(permission)
             }
+        }
+        if (needed.isEmpty()) {
+            library.rescan()
         } else {
-            val permissions = buildList {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q &&
-                    androidx.core.content.ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
-            if (permissions.isEmpty()) library.rescan() else legacyStoragePermission.launch(permissions.toTypedArray())
+            audioPermission.launch(needed.toTypedArray())
         }
     }
 
@@ -164,16 +145,8 @@ fun MediaAnvilApp() {
     LaunchedEffect(Unit) {
         library.startup()
         library.maybeCheckForUpdate()
-        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            androidx.core.content.ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.READ_EXTERNAL_STORAGE,
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-        if (granted) {
-            // Do not throw the user into the broad-storage settings screen on first launch.
+        if (library.hasStorageAccess()) {
+            // Do not throw the user into a permission screen on first launch.
             // The empty-library explanation owns that explicit user action.
             requestNotificationAccess()
         }
