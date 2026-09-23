@@ -76,11 +76,11 @@ gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-配置一次 Secrets 后，创建并推送与 `versionName` 一致的标签即可发布，例如 V1.02 使用：
+配置一次 Secrets 后，创建并推送与 `versionName` 一致的标签即可发布，例如 V1.03 使用：
 
 ```text
-git tag v1.02
-git push origin v1.02
+git tag v1.03
+git push origin v1.03
 ```
 
 工作流会先运行 Release 单元测试和 Lint，验证 APK 签名及标签版本，再创建 GitHub Release。应用内更新仅在 Release 同时包含 APK 和对应的 `.sha256` 文件时允许下载安装；校验失败的文件不会交给系统安装器。
