@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup rules for Android 11 (API 30) and below, where the system reads
+  android:fullBackupContent. Android 12+ uses data_extraction_rules.xml instead.
+
+  Everything the app stores is user data worth keeping, except the downloaded
+  update package: it is large, it is only useful on the device that downloaded
+  it, and restoring a stale one would offer an install the user did not ask for.
+-->
+<full-backup-content>
+    <exclude domain="file" path="update/" />
+</full-backup-content>

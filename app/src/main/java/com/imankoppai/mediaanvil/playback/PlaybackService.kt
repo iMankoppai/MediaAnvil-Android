@@ -41,18 +41,17 @@ class PlaybackService : MediaSessionService() {
     private var pendingSinglePress: Runnable? = null
 
     /** Keeps the notification buttons and the seek increments on the current settings. */
-    private val preferencesListener =
-        android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            when (key) {
-                "seek_back_seconds", "seek_forward_seconds" -> {
-                    exoPlayer?.let { player ->
-                        player.setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
-                        player.setSeekForwardIncrementMs(preferences.seekForwardSeconds * 1_000L)
-                    }
-                    mediaSession?.setMediaButtonPreferences(notificationButtons())
+    private val preferencesListener: (String) -> Unit = { key ->
+        when (key) {
+            "seek_back_seconds", "seek_forward_seconds" -> {
+                exoPlayer?.let { player ->
+                    player.setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
+                    player.setSeekForwardIncrementMs(preferences.seekForwardSeconds * 1_000L)
                 }
+                mediaSession?.setMediaButtonPreferences(notificationButtons())
             }
         }
+    }
 
     private val loopTicker = object : Runnable {
         override fun run() {
@@ -521,6 +520,10 @@ class PlaybackService : MediaSessionService() {
             player.release()
             release()
         }
+        // The position and history just written went through the async DataStore path;
+        // wait for them to land before the service's process may go away, which is what
+        // SharedPreferences' apply() used to guarantee on our behalf.
+        if (::preferences.isInitialized) preferences.flushPendingWrites()
         mediaSession = null
         exoPlayer = null
         super.onDestroy()

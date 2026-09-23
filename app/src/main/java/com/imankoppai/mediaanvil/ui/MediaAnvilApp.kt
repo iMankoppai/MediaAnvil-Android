@@ -68,6 +68,9 @@ internal enum class MainTab(val titleRes: Int) {
 fun MediaAnvilApp() {
     val context = LocalContext.current
     val library: LibraryViewModel = viewModel()
+    val playlists: PlaylistViewModel = viewModel()
+    val settings: SettingsViewModel = viewModel()
+    val updates: UpdateViewModel = viewModel()
     var controller by remember { mutableStateOf<MediaController?>(null) }
     // Survives the activity recreation a system locale change triggers, so
     // switching language stays on the current tab instead of resetting to Media.
@@ -122,9 +125,9 @@ fun MediaAnvilApp() {
         future.addListener({
             runCatching { future.get() }.onSuccess { mediaController ->
                 mediaController.playbackParameters =
-                    androidx.media3.common.PlaybackParameters(library.preferences.playbackSpeed)
-                mediaController.shuffleModeEnabled = library.preferences.shuffleEnabled
-                mediaController.repeatMode = library.preferences.repeatMode
+                    androidx.media3.common.PlaybackParameters(settings.preferences.playbackSpeed)
+                mediaController.shuffleModeEnabled = settings.preferences.shuffleEnabled
+                mediaController.repeatMode = settings.preferences.repeatMode
                 mediaController.addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                         library.playbackError = when (error.errorCode) {
@@ -144,7 +147,8 @@ fun MediaAnvilApp() {
 
     LaunchedEffect(Unit) {
         library.startup()
-        library.maybeCheckForUpdate()
+        settings.refreshSleepTimer()
+        updates.maybeCheck()
         if (library.hasStorageAccess()) {
             // Do not throw the user into a permission screen on first launch.
             // The empty-library explanation owns that explicit user action.
@@ -165,6 +169,8 @@ fun MediaAnvilApp() {
             MainTab.Media -> CenteredPageContent {
                 LibraryPage(
                     library = library,
+                    playlists = playlists,
+                    settings = settings,
                     controller = controller,
                     onRequestStorageAccess = ::requestStorageAccess,
                     onOpenPlayer = { tab = MainTab.Player },
@@ -175,11 +181,18 @@ fun MediaAnvilApp() {
             // The player manages its own width: it has a two-pane layout for wide screens.
             MainTab.Player -> NowPlayingPage(
                 library = library,
+                settings = settings,
                 controller = controller,
                 onOpenLibrary = { tab = MainTab.Media },
             )
             MainTab.Settings -> CenteredPageContent {
-                SettingsPage(library = library, controller = controller)
+                SettingsPage(
+                    library = library,
+                    playlists = playlists,
+                    settings = settings,
+                    updates = updates,
+                    controller = controller,
+                )
             }
         }
     }
@@ -189,9 +202,9 @@ fun MediaAnvilApp() {
         // closed (定时结束后关闭软件) the screen finishes itself here.
         while (true) {
             kotlinx.coroutines.delay(2_000)
-            val closedAt = library.preferences.sleepTimerClosedAt
+            val closedAt = settings.preferences.sleepTimerClosedAt
             if (closedAt != 0L) {
-                library.preferences.sleepTimerClosedAt = 0L
+                settings.preferences.sleepTimerClosedAt = 0L
                 // Only honour a fresh request: a stale flag must not close a later launch.
                 if (System.currentTimeMillis() - closedAt < 20_000L) {
                     (context as? android.app.Activity)?.finishAffinity()

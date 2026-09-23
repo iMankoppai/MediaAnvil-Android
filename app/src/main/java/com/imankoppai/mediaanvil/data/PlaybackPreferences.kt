@@ -2,103 +2,119 @@ package com.imankoppai.mediaanvil.data
 
 import android.content.Context
 import android.net.Uri
-import androidx.core.content.edit
 import com.imankoppai.mediaanvil.model.TrackGroup
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Every setting and every piece of player data the app remembers, read through
+ * [SettingsStore] (Preferences DataStore). The public surface is unchanged from the
+ * SharedPreferences version, so the rest of the app is unaware of the move; the
+ * one-time copy of existing values is handled by [SettingsMigration] inside the store.
+ */
 class PlaybackPreferences(context: Context) {
-    private val preferences = context.getSharedPreferences("mediaanvil_playback", Context.MODE_PRIVATE)
+    private val store = SettingsStore.get(context)
 
     /** Lets the playback service react to settings that only matter while it runs. */
-    fun registerChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
-        preferences.registerOnSharedPreferenceChangeListener(listener)
+    fun registerChangeListener(listener: (String) -> Unit) {
+        store.addListener(listener)
     }
 
-    fun unregisterChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
-        preferences.unregisterOnSharedPreferenceChangeListener(listener)
+    fun unregisterChangeListener(listener: (String) -> Unit) {
+        store.removeListener(listener)
+    }
+
+    /**
+     * Blocks until accepted writes have reached disk. SharedPreferences flushed its
+     * async `apply()` writes at process shutdown; DataStore needs an explicit wait, so
+     * the playback service calls this when it is destroyed rather than losing a
+     * position or history entry that was written moments earlier.
+     */
+    fun flushPendingWrites() {
+        store.flush()
     }
 
     /** "", "zh-CN" or "en"; empty follows the system language. */
     var language: String
-        get() = preferences.getString("language", "") ?: ""
+        get() = store.getString("language", "") ?: ""
         set(value) {
-            preferences.edit().putString("language", value).apply()
+            store.put("language", value)
         }
 
     var autoLoadLyrics: Boolean
-        get() = preferences.getBoolean("auto_load_lyrics", true)
+        get() = store.getBoolean("auto_load_lyrics", true)
         set(value) {
-            preferences.edit().putBoolean("auto_load_lyrics", value).apply()
+            store.put("auto_load_lyrics", value)
         }
 
     var playbackSpeed: Float
-        get() = preferences.getFloat("playback_speed", 1f)
+        get() = store.getFloat("playback_speed", 1f)
         set(value) {
-            preferences.edit().putFloat("playback_speed", value).apply()
+            store.put("playback_speed", value)
         }
 
     var seekBackSeconds: Int
-        get() = preferences.getInt("seek_back_seconds", 5).coerceIn(1, 300)
+        get() = store.getInt("seek_back_seconds", 5).coerceIn(1, 300)
         set(value) {
-            preferences.edit().putInt("seek_back_seconds", value.coerceIn(1, 300)).apply()
+            store.put("seek_back_seconds", value.coerceIn(1, 300))
         }
 
     var seekForwardSeconds: Int
-        get() = preferences.getInt("seek_forward_seconds", 30).coerceIn(1, 300)
+        get() = store.getInt("seek_forward_seconds", 30).coerceIn(1, 300)
         set(value) {
-            preferences.edit().putInt("seek_forward_seconds", value.coerceIn(1, 300)).apply()
+            store.put("seek_forward_seconds", value.coerceIn(1, 300))
         }
 
     var shuffleEnabled: Boolean
-        get() = preferences.getBoolean("shuffle_enabled", false)
+        get() = store.getBoolean("shuffle_enabled", false)
         set(value) {
-            preferences.edit().putBoolean("shuffle_enabled", value).apply()
+            store.put("shuffle_enabled", value)
         }
 
     var repeatMode: Int
-        get() = preferences.getInt("repeat_mode", 0)
+        get() = store.getInt("repeat_mode", 0)
         set(value) {
-            preferences.edit().putInt("repeat_mode", value).apply()
+            store.put("repeat_mode", value)
         }
 
     /** Sleep timer waits for the current track to finish before pausing. */
     var sleepFinishTrack: Boolean
-        get() = preferences.getBoolean("sleep_finish_track", false)
+        get() = store.getBoolean("sleep_finish_track", false)
         set(value) {
-            preferences.edit().putBoolean("sleep_finish_track", value).apply()
+            store.put("sleep_finish_track", value)
         }
 
     /** Show each lyric line's timestamp above the text. */
     var showLyricsTimestamps: Boolean
-        get() = preferences.getBoolean("show_lyrics_timestamps", false)
+        get() = store.getBoolean("show_lyrics_timestamps", false)
         set(value) {
-            preferences.edit().putBoolean("show_lyrics_timestamps", value).apply()
+            store.put("show_lyrics_timestamps", value)
         }
 
     /** Sleep timer closes the app when it fires. */
     var sleepCloseApp: Boolean
-        get() = preferences.getBoolean("sleep_close_app", false)
+        get() = store.getBoolean("sleep_close_app", false)
         set(value) {
-            preferences.edit().putBoolean("sleep_close_app", value).apply()
+            store.put("sleep_close_app", value)
         }
 
     /**
      * Wall-clock deadline of the running sleep timer, 0 when none is armed. The
      * playback service owns the deadline so the timer survives screen rotation and
-     * the app being backgrounded.
+     * the app being backgrounded. Written synchronously: the service may be killed
+     * moments after arming it.
      */
     var sleepTimerDeadlineAt: Long
-        get() = preferences.getLong("sleep_timer_deadline_at", 0L)
+        get() = store.getLong("sleep_timer_deadline_at", 0L)
         set(value) {
-            preferences.edit().putLong("sleep_timer_deadline_at", value).commit()
+            store.put("sleep_timer_deadline_at", value, synchronous = true)
         }
 
     /** Set by the service when the sleep timer wants the app closed. */
     var sleepTimerClosedAt: Long
-        get() = preferences.getLong("sleep_timer_closed_at", 0L)
+        get() = store.getLong("sleep_timer_closed_at", 0L)
         set(value) {
-            preferences.edit().putLong("sleep_timer_closed_at", value).commit()
+            store.put("sleep_timer_closed_at", value, synchronous = true)
         }
 
     /**
@@ -106,49 +122,49 @@ class PlaybackPreferences(context: Context) {
      * a screen rotation and keep matching the loop the service enforces.
      */
     var loopTrackUri: String
-        get() = preferences.getString("loop_track_uri", "") ?: ""
+        get() = store.getString("loop_track_uri", "") ?: ""
         set(value) {
-            preferences.edit().putString("loop_track_uri", value).apply()
+            store.put("loop_track_uri", value)
         }
 
     var loopStartMs: Long
-        get() = preferences.getLong("loop_start_ms", -1L)
+        get() = store.getLong("loop_start_ms", -1L)
         set(value) {
-            preferences.edit().putLong("loop_start_ms", value).apply()
+            store.put("loop_start_ms", value)
         }
 
     var loopEndMs: Long
-        get() = preferences.getLong("loop_end_ms", -1L)
+        get() = store.getLong("loop_end_ms", -1L)
         set(value) {
-            preferences.edit().putLong("loop_end_ms", value).apply()
+            store.put("loop_end_ms", value)
         }
 
     /** "all" imports every supported audio file; "folders" only imports scanFolders. */
     var libraryScanMode: String
-        get() = preferences.getString("library_scan_mode", "all") ?: "all"
+        get() = store.getString("library_scan_mode", "all") ?: "all"
         set(value) {
-            preferences.edit().putString("library_scan_mode", value).apply()
+            store.put("library_scan_mode", value)
         }
 
     /** Relative folder paths (trailing slash) that are scanned in "folders" mode. */
     var scanFolders: Set<String>
-        get() = preferences.getStringSet("scan_folders", emptySet())?.toSet() ?: emptySet()
+        get() = store.getStringSet("scan_folders", emptySet()) ?: emptySet()
         set(value) {
-            preferences.edit().putStringSet("scan_folders", value).apply()
+            store.put("scan_folders", value.toSet())
         }
 
     /** Remember playback position and the last queue across app restarts. */
     var resumePlayback: Boolean
-        get() = preferences.getBoolean("resume_playback", true)
+        get() = store.getBoolean("resume_playback", true)
         set(value) {
-            preferences.edit().putBoolean("resume_playback", value).apply()
+            store.put("resume_playback", value)
         }
 
     /** JSON object mapping track uri -> saved playback position in ms. */
     var playbackPositions: String
-        get() = preferences.getString("playback_positions", "{}") ?: "{}"
+        get() = store.getString("playback_positions", "{}") ?: "{}"
         set(value) {
-            preferences.edit().putString("playback_positions", value).apply()
+            store.put("playback_positions", value)
         }
 
     fun playbackPositionFor(uri: String): Long = runCatching {
@@ -159,7 +175,7 @@ class PlaybackPreferences(context: Context) {
         runCatching {
             val root = JSONObject(playbackPositions)
             if (positionMs > 0L) root.put(uri, positionMs) else root.remove(uri)
-            preferences.edit().putString("playback_positions", root.toString()).apply()
+            store.put("playback_positions", root.toString())
         }
     }
 
@@ -174,40 +190,43 @@ class PlaybackPreferences(context: Context) {
         runCatching {
             val positions = JSONObject(playbackPositions)
             if (positionMs > 0L) positions.put(uri, positionMs) else positions.remove(uri)
-            val editor = preferences.edit()
-                .putString("playback_positions", positions.toString())
-                .putString("last_queue_uris", JSONArray(queueUris).toString())
-                .putInt("last_queue_index", queueIndex)
-            if (synchronous) editor.commit() else editor.apply()
+            store.putAll(
+                mapOf(
+                    "playback_positions" to positions.toString(),
+                    "last_queue_uris" to JSONArray(queueUris).toString(),
+                    "last_queue_index" to queueIndex,
+                ),
+                synchronous = synchronous,
+            )
         }
     }
 
     /** JSON array of the last queue media ids (track uris). */
     var lastQueueUris: String
-        get() = preferences.getString("last_queue_uris", "[]") ?: "[]"
+        get() = store.getString("last_queue_uris", "[]") ?: "[]"
         set(value) {
-            preferences.edit().putString("last_queue_uris", value).apply()
+            store.put("last_queue_uris", value)
         }
 
     /** Index into lastQueueUris that was current when playback last stopped. */
     var lastQueueIndex: Int
-        get() = preferences.getInt("last_queue_index", -1)
+        get() = store.getInt("last_queue_index", -1)
         set(value) {
-            preferences.edit().putInt("last_queue_index", value).apply()
+            store.put("last_queue_index", value)
         }
 
     /** Epoch-ms of the last automatic update check, throttling it to once a day. */
     var updateLastCheckAt: Long
-        get() = preferences.getLong("update_last_check_at", 0L)
+        get() = store.getLong("update_last_check_at", 0L)
         set(value) {
-            preferences.edit().putLong("update_last_check_at", value).apply()
+            store.put("update_last_check_at", value)
         }
 
     /** "fileName", "title" or "duration". */
     var librarySort: String
-        get() = preferences.getString("library_sort", "fileName") ?: "fileName"
+        get() = store.getString("library_sort", "fileName") ?: "fileName"
         set(value) {
-            preferences.edit().putString("library_sort", value).apply()
+            store.put("library_sort", value)
         }
 
     /**
@@ -218,12 +237,12 @@ class PlaybackPreferences(context: Context) {
      */
     var trackGroups: List<TrackGroup>
         get() {
-            val raw = preferences.getString("track_groups", null) ?: return emptyList()
+            val raw = store.getString("track_groups", null) ?: return emptyList()
             return runCatching {
-                val array = org.json.JSONArray(raw)
+                val array = JSONArray(raw)
                 List(array.length()) { index ->
                     val item = array.getJSONObject(index)
-                    val uris = item.optJSONArray("trackUris") ?: org.json.JSONArray()
+                    val uris = item.optJSONArray("trackUris") ?: JSONArray()
                     TrackGroup(
                         id = item.getString("id"),
                         name = item.getString("name"),
@@ -238,24 +257,24 @@ class PlaybackPreferences(context: Context) {
             }.getOrDefault(emptyList())
         }
         set(value) {
-            val array = org.json.JSONArray()
+            val array = JSONArray()
             value.forEach { group ->
                 array.put(
-                    org.json.JSONObject()
+                    JSONObject()
                         .put("id", group.id)
                         .put("name", group.name)
-                        .put("trackUris", org.json.JSONArray(group.trackUris.distinct())),
+                        .put("trackUris", JSONArray(group.trackUris.distinct())),
                 )
             }
-            preferences.edit().putString("track_groups", array.toString()).apply()
+            store.put("track_groups", array.toString())
         }
 
     /** Favourited track uris, in the order the user added them. */
     var favoriteTrackUris: List<String>
         get() {
-            val raw = preferences.getString("favorite_track_uris", null) ?: return emptyList()
+            val raw = store.getString("favorite_track_uris", null) ?: return emptyList()
             return runCatching {
-                val array = org.json.JSONArray(raw)
+                val array = JSONArray(raw)
                 buildList {
                     for (index in 0 until array.length()) {
                         val uri = array.optString(index)
@@ -265,16 +284,14 @@ class PlaybackPreferences(context: Context) {
             }.getOrDefault(emptyList())
         }
         set(value) {
-            preferences.edit()
-                .putString("favorite_track_uris", org.json.JSONArray(value.distinct()).toString())
-                .apply()
+            store.put("favorite_track_uris", JSONArray(value.distinct()).toString())
         }
 
     /** Newest-first playback history, written by the playback service. */
     var playHistoryRaw: String
-        get() = preferences.getString("play_history", "") ?: ""
+        get() = store.getString("play_history", "") ?: ""
         set(value) {
-            preferences.edit().putString("play_history", value).apply()
+            store.put("play_history", value)
         }
 
     fun playHistory(): List<PlayHistory.Entry> = PlayHistory.decode(playHistoryRaw)
@@ -290,74 +307,66 @@ class PlaybackPreferences(context: Context) {
     fun recordPlayed(uri: String, playedAt: Long = System.currentTimeMillis(), force: Boolean = false) {
         if (uri.isBlank()) return
         val updated = PlayHistory.record(playHistory(), uri, playedAt)
-        preferences.edit(commit = force) {
-            putString("play_history", PlayHistory.encode(updated))
-        }
+        store.put("play_history", PlayHistory.encode(updated), synchronous = force)
     }
 
     /** Tracks hidden from the player library; the underlying documents are untouched. */
     var hiddenTrackUris: Set<String>
-        get() = preferences.getStringSet("hidden_track_uris", emptySet())?.toSet() ?: emptySet()
+        get() = store.getStringSet("hidden_track_uris", emptySet()) ?: emptySet()
         set(value) {
-            preferences.edit().putStringSet("hidden_track_uris", value.toSet()).apply()
+            store.put("hidden_track_uris", value.toSet())
         }
 
     /** Theme mode: "" = follow system, "light", "dark". */
     var themeMode: String
-        get() = preferences.getString("theme_mode", "") ?: ""
+        get() = store.getString("theme_mode", "") ?: ""
         set(value) {
-            preferences.edit().putString("theme_mode", value).apply()
+            store.put("theme_mode", value)
         }
 
     /** Media button double press action: "" = next track, "previous" or "none". */
     var doublePressAction: String
-        get() = when (val saved = preferences.getString("double_press_action", "") ?: "") {
+        get() = when (val saved = store.getString("double_press_action", "") ?: "") {
             "none" -> "pause"
             "", "previous", "pause" -> saved
             else -> ""
         }
         set(value) {
-            preferences.edit().putString("double_press_action", value).apply()
+            store.put("double_press_action", value)
         }
 
     fun customCoverFor(trackUri: Uri): Uri? {
-        val raw = preferences.getString("custom_covers", null) ?: return null
+        val raw = store.getString("custom_covers", null) ?: return null
         return runCatching {
-            org.json.JSONObject(raw).optString(trackUri.toString())
+            JSONObject(raw).optString(trackUri.toString())
                 .takeIf(String::isNotEmpty)
                 ?.let(Uri::parse)
         }.getOrNull()
     }
 
     fun setCustomCover(trackUri: Uri, coverUri: Uri) {
-        val covers = runCatching {
-            org.json.JSONObject(preferences.getString("custom_covers", null) ?: "{}")
-        }.getOrElse { org.json.JSONObject() }
+        val covers = customCoversJson()
         covers.put(trackUri.toString(), coverUri.toString())
-        preferences.edit().putString("custom_covers", covers.toString()).apply()
+        store.put("custom_covers", covers.toString())
     }
 
     fun lyricsOffsetFor(trackUri: Uri): Long = runCatching {
-        JSONObject(preferences.getString("lyrics_offsets", null) ?: "{}")
-            .optLong(trackUri.toString(), 0L)
-            .coerceIn(-60_000L, 60_000L)
+        lyricsOffsetsJson().optLong(trackUri.toString(), 0L).coerceIn(-60_000L, 60_000L)
     }.getOrDefault(0L)
 
     fun setLyricsOffset(trackUri: Uri, offsetMs: Long) {
-        val offsets = runCatching {
-            JSONObject(preferences.getString("lyrics_offsets", null) ?: "{}")
-        }.getOrElse { JSONObject() }
+        val offsets = lyricsOffsetsJson()
         val value = offsetMs.coerceIn(-60_000L, 60_000L)
         if (value == 0L) offsets.remove(trackUri.toString()) else offsets.put(trackUri.toString(), value)
-        preferences.edit().putString("lyrics_offsets", offsets.toString()).apply()
+        store.put("lyrics_offsets", offsets.toString())
     }
 
     internal fun customCoversJson(): JSONObject = runCatching {
-        JSONObject(preferences.getString("custom_covers", null) ?: "{}")
+        JSONObject(store.getString("custom_covers", null) ?: "{}")
     }.getOrElse { JSONObject() }
 
     internal fun lyricsOffsetsJson(): JSONObject = runCatching {
-        JSONObject(preferences.getString("lyrics_offsets", null) ?: "{}")
+        JSONObject(store.getString("lyrics_offsets", null) ?: "{}")
     }.getOrElse { JSONObject() }
 
     internal fun restoreFromBackup(root: JSONObject) {
@@ -386,45 +395,44 @@ class PlaybackPreferences(context: Context) {
         val favorites = root.optJSONArray("favoriteTrackUris")
         val history = if (root.has("playHistory")) root.optString("playHistory") else null
 
-        preferences.edit()
-            .putString("language", settings.optString("language", ""))
-            .putBoolean("auto_load_lyrics", settings.optBoolean("autoLoadLyrics", true))
-            .putFloat("playback_speed", settings.optDouble("playbackSpeed", 1.0).toFloat().coerceIn(0.25f, 3f))
-            .putInt("seek_back_seconds", settings.optInt("seekBackSeconds", 5).coerceIn(1, 300))
-            .putInt("seek_forward_seconds", settings.optInt("seekForwardSeconds", 30).coerceIn(1, 300))
-            .putBoolean("shuffle_enabled", settings.optBoolean("shuffleEnabled", false))
-            .putInt("repeat_mode", settings.optInt("repeatMode", 0))
-            .putString("library_sort", settings.optString("librarySort", "fileName"))
-            .putString("theme_mode", settings.optString("themeMode", ""))
-            .putString("double_press_action", settings.optString("doublePressAction", ""))
-            .putString("track_groups", JSONArray().apply {
+        val restored = linkedMapOf<String, Any?>(
+            "language" to settings.optString("language", ""),
+            "auto_load_lyrics" to settings.optBoolean("autoLoadLyrics", true),
+            "playback_speed" to settings.optDouble("playbackSpeed", 1.0).toFloat().coerceIn(0.25f, 3f),
+            "seek_back_seconds" to settings.optInt("seekBackSeconds", 5).coerceIn(1, 300),
+            "seek_forward_seconds" to settings.optInt("seekForwardSeconds", 30).coerceIn(1, 300),
+            "shuffle_enabled" to settings.optBoolean("shuffleEnabled", false),
+            "repeat_mode" to settings.optInt("repeatMode", 0),
+            "library_sort" to settings.optString("librarySort", "fileName"),
+            "theme_mode" to settings.optString("themeMode", ""),
+            "double_press_action" to settings.optString("doublePressAction", ""),
+            "track_groups" to JSONArray().apply {
                 restoredGroups.forEach { group ->
                     put(JSONObject()
                         .put("id", group.id)
                         .put("name", group.name)
                         .put("trackUris", JSONArray(group.trackUris)))
                 }
-            }.toString())
-            .putStringSet("hidden_track_uris", buildSet {
+            }.toString(),
+            "hidden_track_uris" to buildSet {
                 for (index in 0 until hidden.length()) add(hidden.getString(index))
-            })
-            .putString("custom_covers", covers.toString())
-            .putString("lyrics_offsets", offsets.toString())
-            .apply {
-                if (favorites != null) {
-                    putString(
-                        "favorite_track_uris",
-                        JSONArray().apply {
-                            for (index in 0 until favorites.length()) {
-                                val uri = favorites.optString(index)
-                                if (uri.isNotEmpty()) put(uri)
-                            }
-                        }.toString(),
-                    )
+            },
+            "custom_covers" to covers.toString(),
+            "lyrics_offsets" to offsets.toString(),
+        )
+        if (favorites != null) {
+            restored["favorite_track_uris"] = JSONArray().apply {
+                for (index in 0 until favorites.length()) {
+                    val uri = favorites.optString(index)
+                    if (uri.isNotEmpty()) put(uri)
                 }
-                if (history != null) putString("play_history", history)
-            }
-            .commit()
+            }.toString()
+        }
+        if (history != null) restored["play_history"] = history
+
+        // One synchronous write: a restore must be on disk before the screen reloads
+        // from it, and a half-applied restore would be worse than a failed one.
+        store.putAll(restored, synchronous = true)
     }
 
 }

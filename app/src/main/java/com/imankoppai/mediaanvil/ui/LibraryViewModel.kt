@@ -4,29 +4,32 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.core.net.toUri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.imankoppai.mediaanvil.data.DeviceAudioLibrary
-import com.imankoppai.mediaanvil.data.FavoriteTracks
 import com.imankoppai.mediaanvil.data.LibraryCache
 import com.imankoppai.mediaanvil.data.LibraryScan
 import com.imankoppai.mediaanvil.data.PlaybackPreferences
 import com.imankoppai.mediaanvil.data.SafStorage
 import com.imankoppai.mediaanvil.model.AudioTrack
-import com.imankoppai.mediaanvil.model.TrackGroup
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Lifecycle-aware library state shared by playback, settings, and tag editing. */
+/**
+ * The scanned media library: which audio files were found, which one is selected,
+ * and the sidecar lyrics attached to them.
+ *
+ * Playlists, favourites and history live in [PlaylistViewModel], settings in
+ * [SettingsViewModel], and the update flow in [UpdateViewModel]; this class is only
+ * the scan and its results.
+ */
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val appContext = application.applicationContext
 
-    val preferences = PlaybackPreferences(appContext)
+    private val preferences = PlaybackPreferences(appContext)
 
     var tracks by mutableStateOf<List<AudioTrack>>(emptyList())
         private set
@@ -40,9 +43,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Human-readable message for the latest playback failure, if any. */
     var playbackError by mutableStateOf<String?>(null)
 
-    /** Epoch-ms deadline of the sleep timer, or null when off. */
-    var sleepTimerEndAt by mutableStateOf<Long?>(null)
-        private set
+    /** Tracks hidden from the player library, kept here so a scan can filter them out. */
+    private var hiddenTrackUris: Set<String> = preferences.hiddenTrackUris
 
     /**
      * True when the media library can return audio rows. This needs only the audio
@@ -51,164 +53,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun hasStorageAccess(): Boolean =
         androidx.core.content.ContextCompat.checkSelfPermission(
             appContext,
-            com.imankoppai.mediaanvil.data.DeviceAudioLibrary.readPermission,
+            DeviceAudioLibrary.readPermission,
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-    /** Mirrors [PlaybackPreferences.autoLoadLyrics] so open screens react immediately. */
-    var autoLoadLyrics by mutableStateOf(preferences.autoLoadLyrics)
-        private set
-
-    fun updateAutoLoadLyrics(value: Boolean) {
-        autoLoadLyrics = value
-        preferences.autoLoadLyrics = value
-    }
-
-    /** Mirrors [PlaybackPreferences.resumePlayback] so the settings switch reacts immediately. */
-    var resumePlayback by mutableStateOf(preferences.resumePlayback)
-        private set
-
-    fun updateResumePlayback(value: Boolean) {
-        resumePlayback = value
-        preferences.resumePlayback = value
-    }
-
-    /** Mirrors [PlaybackPreferences.showLyricsTimestamps] so open screens react immediately. */
-    var showLyricsTimestamps by mutableStateOf(preferences.showLyricsTimestamps)
-        private set
-
-    fun updateShowLyricsTimestamps(value: Boolean) {
-        showLyricsTimestamps = value
-        preferences.showLyricsTimestamps = value
-    }
-
     /**
-     * Arms the sleep timer. The playback service watches the stored deadline and
-     * applies the stop policy, so the timer keeps running across rotation and while
-     * the app sits in the background.
+     * Re-reads which tracks are hidden and drops them from the visible list, so the
+     * library reacts at once after a track is hidden or restored.
      */
-    fun startSleepTimer(minutes: Int) {
-        val deadline = System.currentTimeMillis() + minutes * 60_000L
-        preferences.sleepTimerDeadlineAt = deadline
-        sleepTimerEndAt = deadline
-    }
-
-    fun cancelSleepTimer() {
-        preferences.sleepTimerDeadlineAt = 0L
-        sleepTimerEndAt = null
-    }
-
-    /** Re-reads the deadline so screens reflect a timer that fired elsewhere. */
-    fun refreshSleepTimer() {
-        val deadline = preferences.sleepTimerDeadlineAt
-        sleepTimerEndAt = deadline.takeIf { it > System.currentTimeMillis() }
-    }
-
-    /** User-created playlist-like groups, mirrored into preferences. */
-    var trackGroups by mutableStateOf(preferences.trackGroups)
-        private set
-
-    var hiddenTrackUris by mutableStateOf(preferences.hiddenTrackUris)
-        private set
-
-    fun hideTrack(uri: Uri) {
-        val key = uri.toString()
-        val selectedUri = selectedTrack?.uri
-        hiddenTrackUris = hiddenTrackUris + key
-        preferences.hiddenTrackUris = hiddenTrackUris
-        tracks = tracks.filterNot { it.uri == uri }
-        selectedIndex = tracks.indexOfFirst { it.uri == selectedUri }
-    }
-
-    fun restoreHiddenTracks() {
-        hiddenTrackUris = emptySet()
-        preferences.hiddenTrackUris = emptySet()
-        rescan(quiet = false)
-    }
-
-    fun reloadAfterPreferencesRestore() {
-        trackGroups = preferences.trackGroups
+    fun refreshHiddenTracks() {
         hiddenTrackUris = preferences.hiddenTrackUris
-        favoriteTrackUris = preferences.favoriteTrackUris
-        playHistory = preferences.playHistory()
-        rescan(quiet = false)
+        tracks = tracks.filterNot { it.uri.toString() in hiddenTrackUris }
     }
-
-    fun createGroup(name: String): Boolean {
-        val clean = name.trim()
-        if (clean.isEmpty() || trackGroups.any { it.name.equals(clean, ignoreCase = true) }) return false
-        trackGroups = trackGroups + TrackGroup(java.util.UUID.randomUUID().toString(), clean, emptyList())
-        preferences.trackGroups = trackGroups
-        return true
-    }
-
-    fun renameGroup(id: String, name: String): Boolean {
-        val clean = name.trim()
-        if (clean.isEmpty() || trackGroups.any { it.id != id && it.name.equals(clean, ignoreCase = true) }) return false
-        trackGroups = trackGroups.map { if (it.id == id) it.copy(name = clean) else it }
-        preferences.trackGroups = trackGroups
-        return true
-    }
-
-    fun deleteGroup(id: String) {
-        trackGroups = trackGroups.filterNot { it.id == id }
-        preferences.trackGroups = trackGroups
-    }
-
-    /** Replaces a group's tracks; the given order becomes the playback order. */
-    fun setGroupTracks(id: String, uris: List<String>) {
-        val cleaned = uris.filter { it.isNotBlank() }.distinct()
-        trackGroups = trackGroups.map { if (it.id == id) it.copy(trackUris = cleaned) else it }
-        preferences.trackGroups = trackGroups
-    }
-
-    /** Appends tracks the user selected, keeping their existing order first. */
-    fun addTracksToGroup(id: String, uris: Collection<String>) {
-        val group = trackGroups.firstOrNull { it.id == id } ?: return
-        setGroupTracks(id, group.trackUris + uris)
-    }
-
-    fun removeTrackFromGroup(id: String, uri: Uri) {
-        val group = trackGroups.firstOrNull { it.id == id } ?: return
-        setGroupTracks(id, group.trackUris - uri.toString())
-    }
-
-    /** A group's still-available tracks, in the order the user arranged them. */
-    fun tracksInGroup(group: TrackGroup): List<AudioTrack> =
-        LibraryQuery.resolve(tracks, { it.uri.toString() }, group.trackUris)
-
-    /** Favourites mirrored into preferences, in the order the user added them. */
-    var favoriteTrackUris by mutableStateOf(preferences.favoriteTrackUris)
-        private set
-
-    fun isFavorite(uri: Uri): Boolean = uri.toString() in favoriteTrackUris
-
-    fun toggleFavorite(uri: Uri) {
-        favoriteTrackUris = FavoriteTracks.toggle(favoriteTrackUris, uri.toString())
-        preferences.favoriteTrackUris = favoriteTrackUris
-    }
-
-    /** Still-available favourites in saved order; missing audio is skipped. */
-    val favoriteTracks: List<AudioTrack>
-        get() = LibraryQuery.resolve(tracks, { it.uri.toString() }, favoriteTrackUris)
-
-    /** Newest-first playback history, written by the playback service. */
-    var playHistory by mutableStateOf(preferences.playHistory())
-        private set
-
-    /** Records a track as played and refreshes the visible history. */
-    fun recordPlayed(uri: String) {
-        preferences.recordPlayed(uri)
-        playHistory = preferences.playHistory()
-    }
-
-    /** Re-reads the history so a track recorded by the service shows up here. */
-    fun refreshPlayHistory() {
-        playHistory = preferences.playHistory()
-    }
-
-    /** Recently played tracks that are still accessible, newest first. */
-    val recentTracks: List<AudioTrack>
-        get() = LibraryQuery.resolve(tracks, { it.uri.toString() }, playHistory.map { it.uri })
 
     val selectedTrack: AudioTrack? get() = tracks.getOrNull(selectedIndex)
 
@@ -250,8 +105,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     /** Show the cached library instantly, then refresh quietly in the background. */
     fun startup() {
-        // A sleep timer armed before the screen was recreated is still running.
-        refreshSleepTimer()
+        hiddenTrackUris = preferences.hiddenTrackUris
         val snapshot = LibraryCache.load(appContext)
         if (snapshot != null) {
             tracks = snapshot.tracks.map { record ->
@@ -357,100 +211,4 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Folders scanned in "folders" mode; empty means scan everything. */
     private fun allowedScanFolders(): Set<String> =
         if (preferences.libraryScanMode == "folders") preferences.scanFolders else emptySet()
-
-    /** Newest GitHub release when an in-app update is available, else null. */
-    var updateRelease by mutableStateOf<com.imankoppai.mediaanvil.update.AppRelease?>(null)
-        private set
-
-    /** -1 while idle, 0..100 while the update APK is downloading. */
-    var updateProgress by mutableIntStateOf(-1)
-        private set
-
-    /** True once the update APK is fully downloaded and ready to install. */
-    var updateApkReady by mutableStateOf(false)
-        private set
-
-    /** True when the last download attempt failed; offers a retry. */
-    var updateFailed by mutableStateOf(false)
-        private set
-
-    fun reportUpdateRelease(release: com.imankoppai.mediaanvil.update.AppRelease?) {
-        updateRelease = release
-        updateProgress = -1
-        updateApkReady = false
-        updateFailed = false
-    }
-
-    fun dismissUpdate() {
-        updateRelease = null
-    }
-
-    /** Silent startup check for a newer GitHub release, throttled to once a day.
-        The timestamp is only recorded on success so a failed check (offline)
-        is retried on the next launch instead of being suppressed for a day. */
-    fun maybeCheckForUpdate() {
-        val now = System.currentTimeMillis()
-        if (now - preferences.updateLastCheckAt < UPDATE_CHECK_INTERVAL_MS) return
-        viewModelScope.launch {
-            val release = withContext(Dispatchers.IO) {
-                runCatching { com.imankoppai.mediaanvil.update.AppUpdateChecker.fetchLatest() }.getOrNull()
-            } ?: return@launch
-            preferences.updateLastCheckAt = System.currentTimeMillis()
-            val current = runCatching {
-                appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName
-            }.getOrNull() ?: return@launch
-            if (com.imankoppai.mediaanvil.update.AppUpdateChecker.isNewer(release.tagName, current)) {
-                reportUpdateRelease(release)
-            }
-        }
-    }
-
-    fun startUpdateDownload() {
-        val release = updateRelease ?: return
-        if (updateProgress >= 0) return
-        updateProgress = 0
-        updateFailed = false
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    com.imankoppai.mediaanvil.update.AppUpdateInstaller.downloadApk(
-                        appContext,
-                        release.apkUrl,
-                        release.sha256Url,
-                    ) { percent ->
-                        viewModelScope.launch {
-                            if (updateProgress in 0..99) updateProgress = percent
-                        }
-                    }
-                }
-            }
-            result.onSuccess {
-                updateProgress = 100
-                updateFailed = false
-                updateApkReady = true
-                if (com.imankoppai.mediaanvil.update.AppUpdateInstaller.canInstall(appContext)) {
-                    installDownloadedUpdate()
-                }
-            }.onFailure {
-                updateProgress = -1
-                updateApkReady = false
-                updateFailed = true
-            }
-        }
-    }
-
-    /** Launches the system installer, or the one-time unknown-sources permission page. */
-    fun installDownloadedUpdate() {
-        if (!updateApkReady) return
-        val installer = com.imankoppai.mediaanvil.update.AppUpdateInstaller
-        if (installer.canInstall(appContext)) {
-            installer.install(appContext, installer.apkFile(appContext))
-        } else {
-            installer.unknownSourcesSettings(appContext)
-        }
-    }
-
-    companion object {
-        private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
-    }
 }

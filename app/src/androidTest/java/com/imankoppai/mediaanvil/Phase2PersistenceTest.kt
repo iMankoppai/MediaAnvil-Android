@@ -34,8 +34,15 @@ class Phase2PersistenceTest {
     }
 
     private fun clearPlayerData() {
+        // Both stores have to go: the legacy file is what the migration reads, and the
+        // DataStore holds what it wrote. The process-wide snapshot is cached too, so it
+        // is dropped as well — otherwise one test's values would leak into the next and
+        // these assertions would depend on execution order.
         context.getSharedPreferences("mediaanvil_playback", Context.MODE_PRIVATE)
             .edit().clear().commit()
+        com.imankoppai.mediaanvil.data.SettingsStore.resetForTests()
+        com.imankoppai.mediaanvil.data.SettingsStore.dataStoreFile(context).delete()
+        com.imankoppai.mediaanvil.data.SettingsStore.resetForTests()
     }
 
     /** A new instance reads the same file, so this is what a relaunch sees. */

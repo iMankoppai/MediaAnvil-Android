@@ -96,6 +96,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.media3:media3-common:1.11.1")
     implementation("androidx.media3:media3-exoplayer:1.11.1")

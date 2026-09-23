@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup and device-transfer rules for Android 12 (API 31) and above.
+  Older releases read backup_rules.xml through android:fullBackupContent.
+
+  Only the downloaded update package is excluded; see backup_rules.xml. Listing
+  no <include> element keeps the default "back up everything else" behaviour, so
+  settings, playlists, favourites, play history, hidden tracks, lyric offsets and
+  custom cover links all survive a restore.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="update/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="update/" />
+    </device-transfer>
+</data-extraction-rules>

@@ -104,6 +104,8 @@ private enum class MusicView { Songs, Albums, Artists }
 @Composable
 internal fun LibraryPage(
     library: LibraryViewModel,
+    playlists: PlaylistViewModel,
+    settings: SettingsViewModel,
     controller: androidx.media3.session.MediaController?,
     onRequestStorageAccess: () -> Unit,
     onOpenPlayer: () -> Unit,
@@ -119,7 +121,7 @@ internal fun LibraryPage(
         com.imankoppai.mediaanvil.data.SafStorage.takePersistablePermission(context, uri)
         val folder = com.imankoppai.mediaanvil.data.DeviceAudioLibrary.treeUriToRelativeFolder(uri)
         if (folder != null) {
-            library.preferences.scanFolders = library.preferences.scanFolders + folder
+            settings.preferences.scanFolders = settings.preferences.scanFolders + folder
             library.rescan(quiet = true)
         }
     }
@@ -157,7 +159,7 @@ internal fun LibraryPage(
         onDispose { player.removeListener(listener) }
     }
 
-    var sortMode by remember { mutableStateOf(library.preferences.librarySort) }
+    var sortMode by remember { mutableStateOf(settings.preferences.librarySort) }
 
     BackHandler(enabled = selectedTab == GROUPS_TAB && openTrackGroupId != null) {
         openTrackGroupId = null
@@ -203,8 +205,12 @@ internal fun LibraryPage(
             menuOpen = menuOpen,
             onMenuOpenChange = { menuOpen = it },
             onRescan = { library.rescan() },
-            hiddenTrackCount = library.hiddenTrackUris.size,
-            onRestoreHiddenTracks = { library.restoreHiddenTracks() },
+            hiddenTrackCount = playlists.hiddenTrackUris.size,
+            onRestoreHiddenTracks = {
+                playlists.restoreHiddenTracks()
+                library.refreshHiddenTracks()
+                library.rescan(quiet = true)
+            },
             sortLabelText = sortLabel(sortMode),
             onSortCycle = {
                 sortMode = when (sortMode) {
@@ -212,7 +218,7 @@ internal fun LibraryPage(
                     "title" -> "duration"
                     else -> "fileName"
                 }
-                library.preferences.librarySort = sortMode
+                settings.preferences.librarySort = sortMode
             },
         )
 
@@ -234,29 +240,35 @@ internal fun LibraryPage(
         when (selectedTab) {
             GROUPS_TAB -> TrackGroupView(
                 library = library,
+                playlists = playlists,
+                settings = settings,
                 controller = controller,
                 openGroupId = openTrackGroupId,
                 onOpenGroup = { openTrackGroupId = it },
                 onEditTrack = onEditTrack,
             )
             FAVORITES_TAB -> {
-                val favorites = library.favoriteTracks
+                val favorites = playlists.favoriteTracks(library.tracks)
                 SimpleTrackList(
                     tracks = favorites,
                     emptyText = stringResource(R.string.favorites_empty),
                     library = library,
+                    playlists = playlists,
+                    settings = settings,
                     controller = controller,
                     onEditTrack = onEditTrack,
                 )
             }
             RECENT_TAB -> {
                 // The playback service writes the history, so re-read it on entry.
-                LaunchedEffect(Unit) { library.refreshPlayHistory() }
-                val recent = library.recentTracks
+                LaunchedEffect(Unit) { playlists.refreshPlayHistory() }
+                val recent = playlists.recentTracks(library.tracks)
                 SimpleTrackList(
                     tracks = recent,
                     emptyText = stringResource(R.string.recent_empty),
                     library = library,
+                    playlists = playlists,
+                    settings = settings,
                     controller = controller,
                     onEditTrack = onEditTrack,
                 )
@@ -289,7 +301,7 @@ internal fun LibraryPage(
                             actionLabel = stringResource(R.string.storage_access_action),
                             onAction = onRequestStorageAccess,
                         )
-                        library.preferences.libraryScanMode == "folders" -> EmptyLibrary(
+                        settings.preferences.libraryScanMode == "folders" -> EmptyLibrary(
                             hint = stringResource(R.string.empty_folder_hint),
                             actionLabel = stringResource(R.string.empty_go_settings),
                             onAction = {
@@ -369,8 +381,9 @@ internal fun LibraryPage(
                                 }
                                 androidx.compose.material3.TextButton(onClick = {
                                     selectedUris.forEach { uri ->
-                                        library.hideTrack(android.net.Uri.parse(uri))
+                                        playlists.hideTrack(android.net.Uri.parse(uri))
                                     }
+                                    library.refreshHiddenTracks()
                                     selectionMode = false
                                     selectedUris = emptySet()
                                 }) {
@@ -390,17 +403,17 @@ internal fun LibraryPage(
                                 title = { Text(stringResource(R.string.selection_add_group)) },
                                 text = {
                                     Column {
-                                        if (library.trackGroups.isEmpty()) {
+                                        if (playlists.trackGroups.isEmpty()) {
                                             Text(stringResource(R.string.selection_no_groups))
                                         }
-                                        library.trackGroups.forEach { group ->
+                                        playlists.trackGroups.forEach { group ->
                                             Text(
                                                 group.name,
                                                 style = MaterialTheme.typography.bodyLarge,
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .clickable {
-                                                        library.addTracksToGroup(group.id, selectedUris)
+                                                        playlists.addTracksToGroup(group.id, selectedUris)
                                                         groupDialogOpen = false
                                                         selectionMode = false
                                                         selectedUris = emptySet()
@@ -448,13 +461,15 @@ internal fun LibraryPage(
                                                         selectedUris + track.uri.toString()
                                                     }
                                                 } else {
-                                                    playFromLibrary(library, controller, filtered.indexOf(track), filtered)
+                                                    playFromLibrary(library, settings, controller, filtered.indexOf(track), filtered)
                                                 }
                                             },
                                             onEdit = { onEditTrack(track) },
-                                            onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
-                                            isFavorite = library.isFavorite(track.uri),
-                                            onToggleFavorite = { library.toggleFavorite(track.uri) },
+                                            onRemoveFromPlayer = {
+                                                removeTrackFromPlayer(library, playlists, controller, track)
+                                            },
+                                            isFavorite = playlists.isFavorite(track.uri),
+                                            onToggleFavorite = { playlists.toggleFavorite(track.uri) },
                                             highlight = searchQuery,
                                         )
                                     }
@@ -467,6 +482,8 @@ internal fun LibraryPage(
                                 onOpenGroup = { openGroup = it },
                                 groupIcon = Icons.Filled.Album,
                                 library = library,
+                                playlists = playlists,
+                                settings = settings,
                                 controller = controller,
                                 onEditTrack = onEditTrack,
                             )
@@ -476,6 +493,8 @@ internal fun LibraryPage(
                                 onOpenGroup = { openGroup = it },
                                 groupIcon = Icons.Filled.Person,
                                 library = library,
+                                playlists = playlists,
+                                settings = settings,
                                 controller = controller,
                                 onEditTrack = onEditTrack,
                             )
@@ -505,7 +524,6 @@ internal fun LibraryPage(
     if (queueOpen) {
         QueueSheet(library, controller, onDismiss = { queueOpen = false })
     }
-
 }
 
 @Composable
@@ -591,6 +609,8 @@ private fun TopBar(
 @Composable
 private fun TrackGroupView(
     library: LibraryViewModel,
+    playlists: PlaylistViewModel,
+    settings: SettingsViewModel,
     controller: androidx.media3.session.MediaController?,
     openGroupId: String?,
     onOpenGroup: (String?) -> Unit,
@@ -607,7 +627,7 @@ private fun TrackGroupView(
         nameError = false
     }
 
-    val openGroup = library.trackGroups.firstOrNull { it.id == openGroupId }
+    val openGroup = playlists.trackGroups.firstOrNull { it.id == openGroupId }
     if (openGroupId != null && openGroup == null) {
         LaunchedEffect(openGroupId) { onOpenGroup(null) }
     }
@@ -630,11 +650,11 @@ private fun TrackGroupView(
                     Text(stringResource(R.string.group_create))
                 }
             }
-            if (library.trackGroups.isEmpty()) {
+            if (playlists.trackGroups.isEmpty()) {
                 SectionPlaceholder(stringResource(R.string.groups_empty))
             } else {
                 LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                    itemsIndexed(library.trackGroups, key = { _, group -> group.id }) { _, group ->
+                    itemsIndexed(playlists.trackGroups, key = { _, group -> group.id }) { _, group ->
                         val availableCount = library.tracks.count { it.uri.toString() in group.trackUris }
                         var menuOpen by remember(group.id) { mutableStateOf(false) }
                         Row(
@@ -671,7 +691,7 @@ private fun TrackGroupView(
                                         text = { Text(stringResource(R.string.group_delete)) },
                                         onClick = {
                                             menuOpen = false
-                                            library.deleteGroup(group.id)
+                                            playlists.deleteGroup(group.id)
                                         },
                                     )
                                 }
@@ -686,7 +706,7 @@ private fun TrackGroupView(
         // Resolved through the saved uri order, so the list plays back in the order
         // the user arranged rather than in library order.
         val groupTracks = remember(library.tracks, openGroup.trackUris) {
-            library.tracksInGroup(openGroup)
+            playlists.tracksInGroup(openGroup, library.tracks)
         }
         var menuOpen by remember(openGroup.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxSize()) {
@@ -725,7 +745,7 @@ private fun TrackGroupView(
                             text = { Text(stringResource(R.string.group_delete)) },
                             onClick = {
                                 menuOpen = false
-                                library.deleteGroup(openGroup.id)
+                                playlists.deleteGroup(openGroup.id)
                                 onOpenGroup(null)
                             },
                         )
@@ -740,12 +760,14 @@ private fun TrackGroupView(
                         TrackRow(
                             track = track,
                             current = track.uri == library.selectedTrack?.uri,
-                            onClick = { playFromLibrary(library, controller, groupTracks.indexOf(track), groupTracks) },
+                            onClick = { playFromLibrary(library, settings, controller, groupTracks.indexOf(track), groupTracks) },
                             onEdit = { onEditTrack(track) },
-                            onRemoveFromGroup = { library.removeTrackFromGroup(openGroup.id, track.uri) },
-                            onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
-                            isFavorite = library.isFavorite(track.uri),
-                            onToggleFavorite = { library.toggleFavorite(track.uri) },
+                            onRemoveFromGroup = { playlists.removeTrackFromGroup(openGroup.id, track.uri) },
+                            onRemoveFromPlayer = {
+                                removeTrackFromPlayer(library, playlists, controller, track)
+                            },
+                            isFavorite = playlists.isFavorite(track.uri),
+                            onToggleFavorite = { playlists.toggleFavorite(track.uri) },
                         )
                     }
                     item { Spacer(Modifier.height(96.dp)) }
@@ -781,8 +803,8 @@ private fun TrackGroupView(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val saved = if (groupId.isEmpty()) library.createGroup(nameInput)
-                    else library.renameGroup(groupId, nameInput)
+                    val saved = if (groupId.isEmpty()) playlists.createGroup(nameInput)
+                    else playlists.renameGroup(groupId, nameInput)
                     if (saved) editingNameFor = null else nameError = true
                 }) { Text(stringResource(R.string.save)) }
             },
@@ -793,12 +815,12 @@ private fun TrackGroupView(
     }
 
     selectingTracksFor?.let { groupId ->
-        library.trackGroups.firstOrNull { it.id == groupId }?.let { group ->
+        playlists.trackGroups.firstOrNull { it.id == groupId }?.let { group ->
             GroupTrackPicker(
                 group = group,
                 tracks = library.tracks,
                 onSave = {
-                    library.setGroupTracks(group.id, it)
+                    playlists.setGroupTracks(group.id, it)
                     selectingTracksFor = null
                 },
                 onDismiss = { selectingTracksFor = null },
@@ -875,6 +897,8 @@ private fun GroupBrowser(
     onOpenGroup: (String?) -> Unit,
     groupIcon: ImageVector,
     library: LibraryViewModel,
+    playlists: PlaylistViewModel,
+    settings: SettingsViewModel,
     controller: androidx.media3.session.MediaController?,
     onEditTrack: (AudioTrack) -> Unit,
 ) {
@@ -944,11 +968,13 @@ private fun GroupBrowser(
                     TrackRow(
                         track = track,
                         current = track.uri == library.selectedTrack?.uri,
-                        onClick = { playFromLibrary(library, controller, groupTracks.indexOf(track), groupTracks) },
+                        onClick = { playFromLibrary(library, settings, controller, groupTracks.indexOf(track), groupTracks) },
                         onEdit = { onEditTrack(track) },
-                        onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
-                        isFavorite = library.isFavorite(track.uri),
-                        onToggleFavorite = { library.toggleFavorite(track.uri) },
+                        onRemoveFromPlayer = {
+                            removeTrackFromPlayer(library, playlists, controller, track)
+                        },
+                        isFavorite = playlists.isFavorite(track.uri),
+                        onToggleFavorite = { playlists.toggleFavorite(track.uri) },
                     )
                 }
                 item { Spacer(Modifier.height(96.dp)) }
@@ -1114,6 +1140,7 @@ private fun HighlightedText(
 
 private fun removeTrackFromPlayer(
     library: LibraryViewModel,
+    playlists: PlaylistViewModel,
     controller: androidx.media3.session.MediaController?,
     track: AudioTrack,
 ) {
@@ -1122,7 +1149,8 @@ private fun removeTrackFromPlayer(
             .firstOrNull { player.getMediaItemAt(it).mediaId == track.uri.toString() }
         if (queueIndex != null) player.removeMediaItem(queueIndex)
     }
-    library.hideTrack(track.uri)
+    playlists.hideTrack(track.uri)
+    library.refreshHiddenTracks()
 }
 
 @Composable
@@ -1227,6 +1255,8 @@ private fun SimpleTrackList(
     tracks: List<AudioTrack>,
     emptyText: String,
     library: LibraryViewModel,
+    playlists: PlaylistViewModel,
+    settings: SettingsViewModel,
     controller: androidx.media3.session.MediaController?,
     onEditTrack: (AudioTrack) -> Unit,
 ) {
@@ -1239,11 +1269,13 @@ private fun SimpleTrackList(
             TrackRow(
                 track = track,
                 current = track.uri == library.selectedTrack?.uri,
-                onClick = { playFromLibrary(library, controller, tracks.indexOf(track), tracks) },
+                onClick = { playFromLibrary(library, settings, controller, tracks.indexOf(track), tracks) },
                 onEdit = { onEditTrack(track) },
-                onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
-                isFavorite = library.isFavorite(track.uri),
-                onToggleFavorite = { library.toggleFavorite(track.uri) },
+                onRemoveFromPlayer = {
+                    removeTrackFromPlayer(library, playlists, controller, track)
+                },
+                isFavorite = playlists.isFavorite(track.uri),
+                onToggleFavorite = { playlists.toggleFavorite(track.uri) },
             )
         }
         item { Spacer(Modifier.height(96.dp)) }
@@ -1305,6 +1337,7 @@ internal fun formatTime(milliseconds: Long): String {
 
 internal fun playFromLibrary(
     library: LibraryViewModel,
+    settings: SettingsViewModel,
     controller: androidx.media3.session.MediaController?,
     index: Int,
     queue: List<AudioTrack>,
@@ -1327,8 +1360,8 @@ internal fun playFromLibrary(
             .build()
     }
     // Resume from the tapped track's saved position when the feature is on.
-    val startPos = if (library.resumePlayback) {
-        library.preferences.playbackPositionFor(queue[index].uri.toString()).takeIf { it > 0L }
+    val startPos = if (settings.resumePlayback) {
+        settings.preferences.playbackPositionFor(queue[index].uri.toString()).takeIf { it > 0L }
     } else {
         null
     }

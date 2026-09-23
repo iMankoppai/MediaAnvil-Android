@@ -52,18 +52,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun SettingsPage(library: LibraryViewModel, controller: MediaController?) {
+internal fun SettingsPage(
+    library: LibraryViewModel,
+    playlists: PlaylistViewModel,
+    settings: SettingsViewModel,
+    updates: UpdateViewModel,
+    controller: MediaController?,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var message by remember { mutableStateOf<String?>(null) }
     var sleepDialog by remember { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var seekBackSeconds by remember { mutableIntStateOf(library.preferences.seekBackSeconds) }
-    var seekForwardSeconds by remember { mutableIntStateOf(library.preferences.seekForwardSeconds) }
+    var seekBackSeconds by remember { mutableIntStateOf(settings.preferences.seekBackSeconds) }
+    var seekForwardSeconds by remember { mutableIntStateOf(settings.preferences.seekForwardSeconds) }
     // SharedPreferences is not Compose-observable; mirror settings locally so the
     // chips and switches refresh immediately instead of after re-entering the page.
-    var language by remember { mutableStateOf(library.preferences.language) }
-    var doublePressAction by remember { mutableStateOf(library.preferences.doublePressAction) }
+    var language by remember { mutableStateOf(settings.preferences.language) }
+    var doublePressAction by remember { mutableStateOf(settings.preferences.doublePressAction) }
     var checkingUpdate by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf<Uri?>(null) }
     val currentVersion = remember {
@@ -75,7 +81,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { PlayerDataBackup.export(context, uri, library.preferences) }
+                runCatching { PlayerDataBackup.export(context, uri, settings.preferences) }
             }
             message = context.getString(
                 if (result.isSuccess) R.string.backup_exported else R.string.backup_export_failed,
@@ -85,20 +91,20 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) pendingImport = uri }
-    LaunchedEffect(library.sleepTimerEndAt) {
+    LaunchedEffect(settings.sleepTimerEndAt) {
         nowMs = System.currentTimeMillis()
-        while (library.sleepTimerEndAt != null) {
+        while (settings.sleepTimerEndAt != null) {
             delay(5_000)
             nowMs = System.currentTimeMillis()
             // The playback service fires the timer; pick up a fire that happened
             // while this screen was stopped, or after a screen rotation.
-            library.refreshSleepTimer()
+            settings.refreshSleepTimer()
         }
     }
 
     fun applyLanguage(tag: String) {
         language = tag
-        library.preferences.language = tag
+        settings.preferences.language = tag
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             val localeManager = context.getSystemService(android.app.LocaleManager::class.java)
             localeManager.applicationLocales =
@@ -151,7 +157,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     selected = ThemeController.mode.isEmpty(),
                     onClick = {
                         ThemeController.mode = ""
-                        library.preferences.themeMode = ""
+                        settings.preferences.themeMode = ""
                     },
                     label = { Text(stringResource(R.string.theme_system)) },
                 )
@@ -159,7 +165,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     selected = ThemeController.mode == "light",
                     onClick = {
                         ThemeController.mode = "light"
-                        library.preferences.themeMode = "light"
+                        settings.preferences.themeMode = "light"
                     },
                     label = { Text(stringResource(R.string.theme_light)) },
                 )
@@ -167,7 +173,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     selected = ThemeController.mode == "dark",
                     onClick = {
                         ThemeController.mode = "dark"
-                        library.preferences.themeMode = "dark"
+                        settings.preferences.themeMode = "dark"
                     },
                     label = { Text(stringResource(R.string.theme_dark)) },
                 )
@@ -185,8 +191,8 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     )
                 }
                 Switch(
-                    checked = library.autoLoadLyrics,
-                    onCheckedChange = { library.updateAutoLoadLyrics(it) },
+                    checked = settings.autoLoadLyrics,
+                    onCheckedChange = { settings.updateAutoLoadLyrics(it) },
                 )
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
@@ -200,8 +206,8 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     )
                 }
                 Switch(
-                    checked = library.showLyricsTimestamps,
-                    onCheckedChange = { library.updateShowLyricsTimestamps(it) },
+                    checked = settings.showLyricsTimestamps,
+                    onCheckedChange = { settings.updateShowLyricsTimestamps(it) },
                 )
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
@@ -215,8 +221,8 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     )
                 }
                 Switch(
-                    checked = library.resumePlayback,
-                    onCheckedChange = { library.updateResumePlayback(it) },
+                    checked = settings.resumePlayback,
+                    onCheckedChange = { settings.updateResumePlayback(it) },
                 )
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
@@ -226,7 +232,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                 choices = listOf(5, 10, 15, 30),
                 onSelected = {
                     seekBackSeconds = it
-                    library.preferences.seekBackSeconds = it
+                    settings.preferences.seekBackSeconds = it
                 },
             )
             Spacer(Modifier.height(10.dp))
@@ -236,16 +242,16 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                 choices = listOf(10, 15, 30, 60),
                 onSelected = {
                     seekForwardSeconds = it
-                    library.preferences.seekForwardSeconds = it
+                    settings.preferences.seekForwardSeconds = it
                 },
             )
         }
 
-        var scanMode by remember { mutableStateOf(library.preferences.libraryScanMode) }
-        var scanFolders by remember { mutableStateOf(library.preferences.scanFolders) }
+        var scanMode by remember { mutableStateOf(settings.preferences.libraryScanMode) }
+        var scanFolders by remember { mutableStateOf(settings.preferences.scanFolders) }
         fun updateScanFolders(updated: Set<String>) {
             scanFolders = updated
-            library.preferences.scanFolders = updated
+            settings.preferences.scanFolders = updated
             library.rescan(quiet = true)
         }
         val pickFolderLauncher = rememberLauncherForActivityResult(
@@ -272,7 +278,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     onClick = {
                         if (scanMode != "all") {
                             scanMode = "all"
-                            library.preferences.libraryScanMode = "all"
+                            settings.preferences.libraryScanMode = "all"
                             library.rescan(quiet = true)
                         }
                     },
@@ -283,7 +289,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     onClick = {
                         if (scanMode != "folders") {
                             scanMode = "folders"
-                            library.preferences.libraryScanMode = "folders"
+                            settings.preferences.libraryScanMode = "folders"
                             library.rescan(quiet = true)
                         }
                     },
@@ -324,7 +330,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
             }
         }
 
-        val sleepRemaining = library.sleepTimerEndAt?.let { end ->
+        val sleepRemaining = settings.sleepTimerEndAt?.let { end ->
             ((end - nowMs) / 60_000).toInt().coerceAtLeast(1)
         }
         SettingsCard(title = stringResource(R.string.sleep_timer)) {
@@ -337,7 +343,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     modifier = Modifier.weight(1f),
                 )
                 if (sleepRemaining != null) {
-                    OutlinedButton(onClick = { library.cancelSleepTimer() }) {
+                    OutlinedButton(onClick = { settings.cancelSleepTimer() }) {
                         Text(stringResource(R.string.sleep_timer_off))
                     }
                     Spacer(Modifier.width(8.dp))
@@ -350,8 +356,8 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
         if (sleepDialog) {
             SleepTimerDialog(
                 initialMinutes = sleepRemaining ?: 30,
-                preferences = library.preferences,
-                onStart = { minutes -> library.startSleepTimer(minutes) },
+                preferences = settings.preferences,
+                onStart = { minutes -> settings.startSleepTimer(minutes) },
                 onDismiss = { sleepDialog = false },
             )
         }
@@ -368,7 +374,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                         selected = doublePressAction == value,
                         onClick = {
                             doublePressAction = value
-                            library.preferences.doublePressAction = value
+                            settings.preferences.doublePressAction = value
                         },
                         label = { Text(stringResource(labelRes)) },
                     )
@@ -421,44 +427,44 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
             }
         }
 
-        library.updateRelease?.let { release ->
+        updates.release?.let { release ->
             SettingsCard(title = stringResource(R.string.update_banner_title, release.tagName)) {
-                if (library.updateApkReady) {
+                if (updates.apkReady) {
                     Text(stringResource(R.string.update_ready_to_install), style = MaterialTheme.typography.bodyMedium)
                     Button(
-                        onClick = { library.installDownloadedUpdate() },
+                        onClick = { updates.install() },
                         modifier = Modifier.padding(top = 10.dp),
                     ) { Text(stringResource(R.string.update_install_button)) }
-                } else if (library.updateProgress >= 0) {
+                } else if (updates.progress >= 0) {
                     Text(
-                        stringResource(R.string.update_downloading, library.updateProgress),
+                        stringResource(R.string.update_downloading, updates.progress),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     androidx.compose.material3.LinearProgressIndicator(
-                        progress = { library.updateProgress.coerceIn(0, 100) / 100f },
+                        progress = { updates.progress.coerceIn(0, 100) / 100f },
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
-                } else if (library.updateFailed) {
+                } else if (updates.failed) {
                     Text(
                         stringResource(R.string.update_download_failed),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
                     Button(
-                        onClick = { library.startUpdateDownload() },
+                        onClick = { updates.startDownload() },
                         modifier = Modifier.padding(top = 10.dp),
                     ) { Text(stringResource(R.string.update_retry)) }
                     OutlinedButton(
-                        onClick = { library.dismissUpdate() },
+                        onClick = { updates.dismiss() },
                         modifier = Modifier.padding(top = 4.dp),
                     ) { Text(stringResource(R.string.update_dismiss)) }
                 } else {
                     Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                         Button(
-                            onClick = { library.startUpdateDownload() },
+                            onClick = { updates.startDownload() },
                             enabled = release.apkUrl.isNotBlank() && release.sha256Url.isNotBlank(),
                         ) { Text(stringResource(R.string.update_action)) }
-                        OutlinedButton(onClick = { library.dismissUpdate() }) {
+                        OutlinedButton(onClick = { updates.dismiss() }) {
                             Text(stringResource(R.string.update_dismiss))
                         }
                     }
@@ -489,7 +495,7 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                                 // 仓库还没有任何 Release，这与"网络故障"是两回事，不能混为一句提示。
                                 message = context.getString(R.string.update_no_release)
                             } else if (AppUpdateChecker.isNewer(release.tagName, currentVersion)) {
-                                library.reportUpdateRelease(release)
+                                updates.report(release)
                             } else {
                                 message = context.getString(R.string.update_latest)
                             }
@@ -525,13 +531,13 @@ internal fun SettingsPage(library: LibraryViewModel, controller: MediaController
                     pendingImport = null
                     scope.launch {
                         val result = withContext(Dispatchers.IO) {
-                            runCatching { PlayerDataBackup.import(context, uri, library.preferences) }
+                            runCatching { PlayerDataBackup.import(context, uri, settings.preferences) }
                         }
                         if (result.isSuccess) {
-                            seekBackSeconds = library.preferences.seekBackSeconds
-                            seekForwardSeconds = library.preferences.seekForwardSeconds
-                            ThemeController.mode = library.preferences.themeMode
-                            library.reloadAfterPreferencesRestore()
+                            seekBackSeconds = settings.preferences.seekBackSeconds
+                            seekForwardSeconds = settings.preferences.seekForwardSeconds
+                            ThemeController.mode = settings.preferences.themeMode
+                            playlists.reload()
                             message = context.getString(R.string.backup_imported)
                         } else {
                             message = context.getString(R.string.backup_import_failed)

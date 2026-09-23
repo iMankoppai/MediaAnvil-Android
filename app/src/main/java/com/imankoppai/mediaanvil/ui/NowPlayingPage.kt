@@ -109,6 +109,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 @Composable
 internal fun NowPlayingPage(
     library: LibraryViewModel,
+    settings: SettingsViewModel,
     controller: MediaController?,
     onOpenLibrary: () -> Unit,
 ) {
@@ -125,22 +126,22 @@ internal fun NowPlayingPage(
     var loopA by remember { mutableLongStateOf(-1L) }
     var loopB by remember { mutableLongStateOf(-1L) }
     fun storeLoopPoints(start: Long, end: Long) {
-        val preferences = library.preferences
+        val preferences = settings.preferences
         preferences.loopTrackUri = track?.uri?.toString().orEmpty()
         preferences.loopStartMs = start
         preferences.loopEndMs = end
     }
     LaunchedEffect(track?.uri) {
-        val preferences = library.preferences
+        val preferences = settings.preferences
         val restored = track != null && preferences.loopTrackUri == track.uri.toString()
         loopA = if (restored) preferences.loopStartMs else -1L
         loopB = if (restored) preferences.loopEndMs else -1L
     }
-    var speed by remember { mutableStateOf(library.preferences.playbackSpeed) }
+    var speed by remember { mutableStateOf(settings.preferences.playbackSpeed) }
     var queueOpen by remember { mutableStateOf(false) }
     var pendingCoverTrack by remember { mutableStateOf<android.net.Uri?>(null) }
     var customCoverUri by remember(track?.uri) {
-        mutableStateOf(track?.uri?.let(library.preferences::customCoverFor))
+        mutableStateOf(track?.uri?.let(settings.preferences::customCoverFor))
     }
     val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { imageUri ->
         if (imageUri != null) {
@@ -151,7 +152,7 @@ internal fun NowPlayingPage(
                         android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
                     )
                 }
-                library.preferences.setCustomCover(trackUri, imageUri)
+                settings.preferences.setCustomCover(trackUri, imageUri)
                 if (track?.uri == trackUri) customCoverUri = imageUri
                 android.widget.Toast.makeText(context, R.string.custom_cover_saved, android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -235,11 +236,11 @@ internal fun NowPlayingPage(
                     },
                     onSpeedChange = { option ->
                         speed = option
-                        library.preferences.playbackSpeed = option
+                        settings.preferences.playbackSpeed = option
                         controller?.playbackParameters = androidx.media3.common.PlaybackParameters(option)
                     },
-                    onShuffleChange = { library.preferences.shuffleEnabled = it },
-                    onRepeatChange = { library.preferences.repeatMode = it },
+                    onShuffleChange = { settings.preferences.shuffleEnabled = it },
+                    onRepeatChange = { settings.preferences.repeatMode = it },
                     onOpenQueue = { queueOpen = true },
                 )
             }
@@ -276,17 +277,18 @@ internal fun NowPlayingPage(
                         Spacer(Modifier.height(18.dp))
                         playbackModes()
                         Spacer(Modifier.height(21.dp))
-                        TransportRow(library, controller, isPlaying)
+                        TransportRow(library, settings, controller, isPlaying)
                     }
                     VerticalDivider(Modifier.padding(horizontal = 20.dp))
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         LyricsView(
                             library = library,
+                            settings = settings,
                             track = track,
                             positionMs = positionMs,
                             onSeek = { controller?.seekTo(it) },
-                            autoLoadExternal = library.autoLoadLyrics,
-                            showTimestamps = library.showLyricsTimestamps,
+                            autoLoadExternal = settings.autoLoadLyrics,
+                            showTimestamps = settings.showLyricsTimestamps,
                         )
                     }
                 }
@@ -323,11 +325,12 @@ internal fun NowPlayingPage(
                                 } else {
                                     LyricsView(
                                         library = library,
+                                        settings = settings,
                                         track = track,
                                         positionMs = positionMs,
                                         onSeek = { controller?.seekTo(it) },
-                                        autoLoadExternal = library.autoLoadLyrics,
-                                        showTimestamps = library.showLyricsTimestamps,
+                                        autoLoadExternal = settings.autoLoadLyrics,
+                                        showTimestamps = settings.showLyricsTimestamps,
                                     )
                                 }
                             }
@@ -345,7 +348,7 @@ internal fun NowPlayingPage(
                         Spacer(Modifier.height(18.dp))
                         playbackModes()
                         Spacer(Modifier.height(21.dp))
-                        TransportRow(library, controller, isPlaying)
+                        TransportRow(library, settings, controller, isPlaying)
                     }
                 }
             }
@@ -494,7 +497,12 @@ private fun TimeLabels(positionMs: Long, durationMs: Long, modifier: Modifier = 
 }
 
 @Composable
-private fun TransportRow(library: LibraryViewModel, controller: MediaController?, isPlaying: Boolean) {
+private fun TransportRow(
+    library: LibraryViewModel,
+    settings: SettingsViewModel,
+    controller: MediaController?,
+    isPlaying: Boolean,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -513,12 +521,12 @@ private fun TransportRow(library: LibraryViewModel, controller: MediaController?
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             SeekIntervalButton(
-                seconds = library.preferences.seekBackSeconds,
+                seconds = settings.preferences.seekBackSeconds,
                 backward = true,
                 modifier = Modifier.offset(x = (-10).dp),
                 onClick = {
                     controller?.let { player ->
-                        player.seekTo(seekBackTarget(player.currentPosition, library.preferences.seekBackSeconds))
+                        player.seekTo(seekBackTarget(player.currentPosition, settings.preferences.seekBackSeconds))
                     }
                 },
             )
@@ -543,7 +551,7 @@ private fun TransportRow(library: LibraryViewModel, controller: MediaController?
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             SeekIntervalButton(
-                seconds = library.preferences.seekForwardSeconds,
+                seconds = settings.preferences.seekForwardSeconds,
                 backward = false,
                 modifier = Modifier.offset(x = 10.dp),
                 onClick = {
@@ -552,7 +560,7 @@ private fun TransportRow(library: LibraryViewModel, controller: MediaController?
                             seekForwardTarget(
                                 player.currentPosition,
                                 player.duration,
-                                library.preferences.seekForwardSeconds,
+                                settings.preferences.seekForwardSeconds,
                             ),
                         )
                     }
@@ -654,6 +662,7 @@ internal fun lyricsTimestampLabel(ms: Long): String {
 @Composable
 private fun LyricsView(
     library: LibraryViewModel,
+    settings: SettingsViewModel,
     track: AudioTrack,
     positionMs: Long,
     onSeek: (Long) -> Unit,
@@ -673,7 +682,7 @@ private fun LyricsView(
     var managementMenu by remember(track.uri) { mutableStateOf(false) }
     var confirmDelete by remember(track.uri) { mutableStateOf(false) }
     var lyricsOffsetMs by remember(track.uri) {
-        mutableLongStateOf(library.preferences.lyricsOffsetFor(track.uri))
+        mutableLongStateOf(settings.preferences.lyricsOffsetFor(track.uri))
     }
     var queryTitle by remember(track.uri) { mutableStateOf(track.title) }
     var queryArtist by remember(track.uri) { mutableStateOf(track.artist.orEmpty()) }
@@ -1089,7 +1098,7 @@ private fun LyricsView(
                         onClick = {
                             managementMenu = false
                             lyricsOffsetMs = (lyricsOffsetMs - 500L).coerceAtLeast(-60_000L)
-                            library.preferences.setLyricsOffset(track.uri, lyricsOffsetMs)
+                            settings.preferences.setLyricsOffset(track.uri, lyricsOffsetMs)
                         },
                     )
                     DropdownMenuItem(
@@ -1097,7 +1106,7 @@ private fun LyricsView(
                         onClick = {
                             managementMenu = false
                             lyricsOffsetMs = (lyricsOffsetMs + 500L).coerceAtMost(60_000L)
-                            library.preferences.setLyricsOffset(track.uri, lyricsOffsetMs)
+                            settings.preferences.setLyricsOffset(track.uri, lyricsOffsetMs)
                         },
                     )
                     if (lyricsOffsetMs != 0L) {
@@ -1106,7 +1115,7 @@ private fun LyricsView(
                             onClick = {
                                 managementMenu = false
                                 lyricsOffsetMs = 0L
-                                library.preferences.setLyricsOffset(track.uri, 0L)
+                                settings.preferences.setLyricsOffset(track.uri, 0L)
                             },
                         )
                     }
@@ -1173,7 +1182,7 @@ private fun LyricsView(
                         }
                         if (deleted) {
                             library.detachLyrics(track.uri)
-                            library.preferences.setLyricsOffset(track.uri, 0L)
+                            settings.preferences.setLyricsOffset(track.uri, 0L)
                             lyricsOffsetMs = 0L
                             cues = emptyList()
                             statusMessage = context.getString(R.string.lyrics_deleted)
