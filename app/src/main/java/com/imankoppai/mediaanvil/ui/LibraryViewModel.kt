@@ -103,30 +103,41 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun findSidecarLyrics(track: AudioTrack): Pair<Uri, String>? =
         runCatching { SafStorage.findSubtitle(appContext, track) }.getOrNull()
 
-    /** Show the cached library instantly, then refresh quietly in the background. */
+    /**
+     * Show the cached library instantly, then refresh quietly in the background.
+     *
+     * The cache read is disk I/O and used to run on the main thread, because this is
+     * called from a `LaunchedEffect` during the first composition. It is moved to
+     * [Dispatchers.IO]; [loading] is raised for the duration so the empty state does
+     * not flash "no audio files" in the frame before the cache arrives.
+     */
     fun startup() {
         hiddenTrackUris = preferences.hiddenTrackUris
-        val snapshot = LibraryCache.load(appContext)
-        if (snapshot != null) {
-            tracks = snapshot.tracks.map { record ->
-                AudioTrack(
-                    uri = record.uri,
-                    fileName = record.fileName,
-                    title = record.title,
-                    artist = record.artist,
-                    album = record.album,
-                    durationMs = record.durationMs,
-                    subtitleUri = record.subtitleUri,
-                    subtitleExtension = record.subtitleExtension,
-                    relativeFolder = record.relativeFolder,
-                )
-            }.filterNot { it.uri.toString() in hiddenTrackUris }
-            files = LibraryScan(tracks)
-            if (!LibraryCache.isFresh(snapshot)) {
-                scanAll(quiet = true)
+        loading = tracks.isEmpty()
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) { LibraryCache.load(appContext) }
+            if (snapshot != null) {
+                tracks = snapshot.tracks.map { record ->
+                    AudioTrack(
+                        uri = record.uri,
+                        fileName = record.fileName,
+                        title = record.title,
+                        artist = record.artist,
+                        album = record.album,
+                        durationMs = record.durationMs,
+                        subtitleUri = record.subtitleUri,
+                        subtitleExtension = record.subtitleExtension,
+                        relativeFolder = record.relativeFolder,
+                    )
+                }.filterNot { it.uri.toString() in hiddenTrackUris }
+                files = LibraryScan(tracks)
+                loading = false
+                if (!LibraryCache.isFresh(snapshot)) {
+                    scanAll(quiet = true)
+                }
+            } else {
+                scanAll(quiet = false)
             }
-        } else {
-            scanAll(quiet = false)
         }
     }
 
@@ -140,27 +151,32 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         val allowedFolders = allowedScanFolders()
         viewModelScope.launch {
             val previousUri = tracks.getOrNull(selectedIndex)?.uri
+            // Everything that touches the disk, the ContentResolver or the Storage
+            // Access Framework happens inside this one IO block. Sidecar lookup in
+            // particular issues a document query per track, and it used to run after
+            // the block returned — i.e. back on the main thread — so a large library
+            // stalled the frame that was supposed to show the scan results.
             val result = withContext(Dispatchers.IO) {
-                runCatching { DeviceAudioLibrary.scan(appContext, allowedFolders) }
+                val scanned = runCatching { DeviceAudioLibrary.scan(appContext, allowedFolders) }
                     .getOrElse { LibraryScan(emptyList(), emptyList()) }
+                // Sidecar lyrics are located inside user-granted folders; without a
+                // grant the track simply shows no lyrics instead of failing the scan.
+                val withSidecars = scanned.copy(tracks = attachKnownSidecars(scanned.tracks))
+                // Keep the complete scan in cache; hidden tracks are filtered only in
+                // the UI state. This makes restoring them reliable even if the app
+                // closes during the restore scan.
+                LibraryCache.save(appContext, withSidecars)
+                withSidecars
             }
-            val visibleResult = result.copy(
-                tracks = result.tracks.filterNot { it.uri.toString() in hiddenTrackUris },
-            )
-            files = visibleResult
-            tracks = visibleResult.tracks
-            selectedIndex = visibleResult.tracks.indexOfFirst { it.uri == previousUri }
+            val visibleTracks = result.tracks.filterNot { it.uri.toString() in hiddenTrackUris }
+            files = result.copy(tracks = visibleTracks)
+            tracks = visibleTracks
+            selectedIndex = visibleTracks.indexOfFirst { it.uri == previousUri }
             loading = false
-            // Sidecar lyrics are located inside user-granted folders; without a grant
-            // the track simply shows no lyrics instead of failing the scan.
-            tracks = attachKnownSidecars(tracks)
-            // Keep the complete scan in cache; hidden tracks are filtered only in the UI state.
-            // This makes restoring them reliable even if the app closes during the restore scan.
-            LibraryCache.save(appContext, result)
-            if (visibleResult.tracks.isEmpty() && !quiet) {
+            if (visibleTracks.isEmpty() && !quiet) {
                 message = appContext.getString(com.imankoppai.mediaanvil.R.string.no_tracks)
             }
-            onLoaded(visibleResult.tracks.size)
+            onLoaded(visibleTracks.size)
         }
     }
 
