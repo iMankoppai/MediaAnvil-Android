@@ -59,9 +59,7 @@ object AppUpdateInstaller {
                 }
             }
             check(temporary.length() > 0L) { "empty_download" }
-            val expected = parseExpectedSha256(downloadChecksum(sha256Url))
-            val actual = sha256(temporary)
-            check(actual.equals(expected, ignoreCase = true)) { "sha256_mismatch" }
+            verifySha256(temporary, downloadChecksum(sha256Url))
             if (target.exists()) check(target.delete()) { "old_update_delete_failed" }
             check(temporary.renameTo(target)) { "update_publish_failed" }
             return target
@@ -97,6 +95,11 @@ object AppUpdateInstaller {
         Regex("(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
             .find(text)?.value?.lowercase()
             ?: error("invalid_sha256_file")
+
+    internal fun verifySha256(file: File, checksumText: String) {
+        val expected = parseExpectedSha256(checksumText)
+        check(sha256(file).equals(expected, ignoreCase = true)) { "sha256_mismatch" }
+    }
 
     internal fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
