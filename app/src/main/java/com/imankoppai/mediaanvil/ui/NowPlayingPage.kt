@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
@@ -297,7 +298,11 @@ internal fun NowPlayingPage(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 24.dp),
+                            .padding(horizontal = 24.dp)
+                            // The transport row sat close to the bottom bar. The column
+                            // is centred, so this padding lifts the whole block by half
+                            // of it and gives the row room to breathe.
+                            .padding(bottom = 32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -537,7 +542,12 @@ private fun TransportRow(
                     val player = controller
                     if (player?.isPlaying == true) player.pause() else player?.play()
                 },
-                modifier = Modifier.size(68.dp),
+                // requiredSize, not size: this row gives each control a fifth of the
+                // width, which is about 62dp on a 360dp screen — narrower than the
+                // button. size() honours that incoming maximum, so the button came out
+                // 62x68 and CircleShape drew an ellipse. A square is what makes the
+                // circle round.
+                modifier = Modifier.requiredSize(68.dp),
                 shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
