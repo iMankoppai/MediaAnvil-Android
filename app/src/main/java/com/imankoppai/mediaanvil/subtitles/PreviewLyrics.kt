@@ -13,59 +13,80 @@ object PreviewLyrics {
     const val NO_END = Long.MAX_VALUE
 
     fun load(context: Context, track: AudioTrack, autoLoadExternal: Boolean = true): List<SubtitleCue> =
-        if (autoLoadExternal) externalCues(context, track).orEmpty() else emptyList()
+        loadResult(context, track, autoLoadExternal).cues
 
-    private fun externalCues(context: Context, track: AudioTrack): List<SubtitleCue>? {
-        val uri = track.subtitleUri ?: return null
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-        val text = SubtitleLoader.decode(bytes)
-        return when (track.subtitleExtension?.lowercase()) {
-            "lrc" -> parseLrcTimeline(text)
-            "srt", "vtt" -> SubtitleParser.parseTimedBlocks(text)
-            else -> null
+    /**
+     * Loads the sidecar lyrics and reports *why* nothing is showing, so the player
+     * can tell "no file linked" apart from "the file is broken".
+     */
+    fun loadResult(
+        context: Context,
+        track: AudioTrack,
+        autoLoadExternal: Boolean = true,
+    ): LyricsLoad {
+        if (!autoLoadExternal) return LyricsLoad.Disabled
+        val uri = track.subtitleUri ?: return LyricsLoad.NotLinked
+        return read(context, uri, track.subtitleExtension)
+    }
+
+    /** Reads and parses one lyric file, mapping every failure to a reason. */
+    fun read(context: Context, uri: Uri, extension: String?): LyricsLoad {
+        val bytes = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull() ?: return LyricsLoad.Unreadable
+
+        if (bytes.isEmpty()) return LyricsLoad.EmptyFile
+
+        val normalised = extension?.lowercase()?.removePrefix(".")
+        val text = SubtitleDecoder.decode(bytes)
+
+        return fromText(text, normalised)
+    }
+
+    /**
+     * Maps already-decoded lyric text to a load result. Separated from [read] so
+     * the "why is nothing showing" logic is testable without a Context or a file.
+     */
+    internal fun fromText(text: String, extension: String?): LyricsLoad = when (extension) {
+        "lrc" -> fromLrc(text)
+        "srt", "vtt" -> {
+            val cues = SubtitleParser.parseTimedBlocks(text)
+            if (cues.isEmpty()) LyricsLoad.NoTimestamps(metadataOnly = false) else LyricsLoad.Loaded(cues)
         }
+
+        // Unknown extension: try LRC, since that is what a mistyped sidecar
+        // usually is, and only then report it as unsupported.
+        null, "" -> fromLrc(text).let { result ->
+            if (result is LyricsLoad.Loaded) result else LyricsLoad.UnsupportedFormat
+        }
+
+        else -> LyricsLoad.UnsupportedFormat
+    }
+
+    internal fun fromLrc(text: String): LyricsLoad {
+        val parsed = LrcParser.parse(text)
+        if (parsed.lines.isNotEmpty()) return LyricsLoad.Loaded(toCues(parsed.lines))
+        if (text.isBlank()) return LyricsLoad.EmptyFile
+        // Only tags means the file is a lyric sheet without timing information.
+        return LyricsLoad.NoTimestamps(metadataOnly = parsed.metadataLines > 0)
     }
 
     /**
      * LRC timeline where every line ends when the next one starts and the last
      * line stays highlighted, matching the desktop preview behaviour.
+     *
+     * Delegates to the shared [LrcParser], which also applies the file's own
+     * `[offset:]` tag; that adjustment is already baked into the returned times.
      */
-    fun parseLrcTimeline(text: String): List<SubtitleCue> {
-        data class Entry(val startMs: Long, val text: String)
+    fun parseLrcTimeline(text: String): List<SubtitleCue> =
+        toCues(LrcParser.parse(text).lines)
 
-        val entries = mutableListOf<Entry>()
-        for (line in text.lineSequence()) {
-            val matches = SubtitleParser.lrcTimestamp.findAll(line).toList()
-            if (matches.isEmpty() || LrcText.isMetadataLine(line)) continue
-            val content = line.substring(matches.last().range.last + 1).trim()
-            for (match in matches) {
-                val minutes = match.groupValues[1].toLong()
-                val seconds = match.groupValues[2].toLong()
-                val fractionText = match.groupValues[3]
-                val fraction = when (fractionText.length) {
-                    1 -> (fractionText.toLongOrNull() ?: 0L) * 100
-                    2 -> (fractionText.toLongOrNull() ?: 0L) * 10
-                    else -> fractionText.toLongOrNull() ?: 0L
-                }
-                entries += Entry(minutes * 60_000 + seconds * 1_000 + fraction, content)
-            }
-        }
-        val merged = entries
-            .groupBy { it.startMs }
-            .toSortedMap()
-            .map { (startMs, sameTime) ->
-                Entry(startMs, sameTime.map { it.text }.filter(String::isNotEmpty).distinct().joinToString("\n"))
-            }
-            // Blank timestamp lines mark instrumental gaps; dropping them keeps
-            // the previous line highlighted through the gap instead of moving
-            // the highlight onto an invisible empty row.
-            .filter { it.text.isNotEmpty() }
-        return merged.mapIndexed { index, entry ->
+    private fun toCues(lines: List<LrcParser.Line>): List<SubtitleCue> =
+        lines.mapIndexed { index, line ->
             SubtitleCue(
-                startMs = entry.startMs,
-                endMs = merged.getOrNull(index + 1)?.startMs ?: NO_END,
-                text = entry.text,
+                startMs = line.startMs,
+                endMs = lines.getOrNull(index + 1)?.startMs ?: NO_END,
+                text = line.text,
             )
         }
-    }
 }

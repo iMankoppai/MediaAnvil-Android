@@ -16,31 +16,13 @@ object SubtitleParser {
     }
 
     fun parseLrc(text: String, finalDurationMs: Long = 5_000L): List<SubtitleCue> {
-        val starts = buildList {
-            text.lineSequence().forEach { line ->
-                val content = line.replace(lrcTimestamp, "").trim()
-                if (content.isNotEmpty()) {
-                    lrcTimestamp.findAll(line).forEach { match ->
-                        val minutes = match.groupValues[1].toLong()
-                        val seconds = match.groupValues[2].toLong()
-                        val fractionText = match.groupValues[3]
-                        val fraction = when (fractionText.length) {
-                            1 -> fractionText.toLongOrNull()?.times(100) ?: 0L
-                            2 -> fractionText.toLongOrNull()?.times(10) ?: 0L
-                            3 -> fractionText.toLongOrNull() ?: 0L
-                            else -> 0L
-                        }
-                        add(minutes * 60_000 + seconds * 1_000 + fraction to content)
-                    }
-                }
-            }
-        }.sortedBy { it.first }
-
-        return starts.mapIndexed { index, cue ->
+        val parsed = LrcParser.parse(text)
+        val lines = parsed.lines
+        return lines.mapIndexed { index, line ->
             SubtitleCue(
-                startMs = cue.first,
-                endMs = starts.getOrNull(index + 1)?.first ?: cue.first + finalDurationMs,
-                text = cue.second,
+                startMs = line.startMs,
+                endMs = lines.getOrNull(index + 1)?.startMs ?: line.startMs + finalDurationMs,
+                text = line.text,
             )
         }
     }

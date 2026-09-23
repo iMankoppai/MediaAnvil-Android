@@ -660,6 +660,27 @@ internal fun lyricsTimestampLabel(ms: Long): String {
 }
 
 @Composable
+private fun lyricsStatusText(result: com.imankoppai.mediaanvil.subtitles.LyricsLoad?): String =
+    when (result) {
+        is com.imankoppai.mediaanvil.subtitles.LyricsLoad.Loaded -> stringResource(R.string.no_lyrics)
+        com.imankoppai.mediaanvil.subtitles.LyricsLoad.Disabled ->
+            stringResource(R.string.lyrics_status_disabled)
+        com.imankoppai.mediaanvil.subtitles.LyricsLoad.NotLinked, null ->
+            stringResource(R.string.lyrics_status_not_linked)
+        com.imankoppai.mediaanvil.subtitles.LyricsLoad.Unreadable ->
+            stringResource(R.string.lyrics_status_unreadable)
+        com.imankoppai.mediaanvil.subtitles.LyricsLoad.UnsupportedFormat ->
+            stringResource(R.string.lyrics_status_unsupported)
+        com.imankoppai.mediaanvil.subtitles.LyricsLoad.EmptyFile ->
+            stringResource(R.string.lyrics_status_empty)
+        is com.imankoppai.mediaanvil.subtitles.LyricsLoad.NoTimestamps ->
+            stringResource(
+                if (result.metadataOnly) R.string.lyrics_status_metadata_only
+                else R.string.lyrics_status_no_timestamps,
+            )
+    }
+
+@Composable
 private fun LyricsView(
     library: LibraryViewModel,
     settings: SettingsViewModel,
@@ -672,6 +693,8 @@ private fun LyricsView(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var cues by remember(track.uri) { mutableStateOf<List<SubtitleCue>>(emptyList()) }
+    // Why there are no lyrics, so the empty state can say something useful.
+    var loadResult by remember(track.uri) { mutableStateOf<com.imankoppai.mediaanvil.subtitles.LyricsLoad?>(null) }
     var candidates by remember(track.uri) { mutableStateOf<List<OnlineLyricsCandidate>>(emptyList()) }
     var searching by remember(track.uri) { mutableStateOf(false) }
     var searchFinished by remember(track.uri) { mutableStateOf(false) }
@@ -800,17 +823,19 @@ private fun LyricsView(
     }
 
     LaunchedEffect(track.uri, autoLoadExternal) {
-        val loaded = withContext(Dispatchers.IO) {
-            runCatching { PreviewLyrics.load(context, track, autoLoadExternal) }
-                .getOrDefault(emptyList())
+        val result = withContext(Dispatchers.IO) {
+            runCatching { PreviewLyrics.loadResult(context, track, autoLoadExternal) }
+                .getOrDefault(com.imankoppai.mediaanvil.subtitles.LyricsLoad.NotLinked)
         }
-        cues = loaded
+        loadResult = result
+        cues = result.cues
         candidates = emptyList()
         previewCandidate = null
         managingLyrics = false
         statusMessage = null
         searchFinished = false
-        if (loaded.isEmpty() && track.subtitleUri == null && autoLoadExternal) searchOnline()
+        // Only reach for the network when there is genuinely no local lyric file.
+        if (cues.isEmpty() && track.subtitleUri == null && autoLoadExternal) searchOnline()
     }
     // The active line is the last one that has started; its end time is
     // ignored so the line stays blue through instrumental gaps and until the
@@ -1016,7 +1041,7 @@ private fun LyricsView(
                 }
                 else -> {
                     Text(
-                        statusMessage ?: stringResource(R.string.no_lyrics),
+                        statusMessage ?: lyricsStatusText(loadResult),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )

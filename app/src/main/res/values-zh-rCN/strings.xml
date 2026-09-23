@@ -7,6 +7,13 @@
     <string name="storage_access_hint">MediaAnvil 通过系统媒体库读取本地音频，因此只需要读取音频的权限。保存歌词或编辑标签时，会请你选择一次文件夹。数据只在本机处理，不会上传。</string>
     <string name="no_tracks">没有找到支持的音频文件。</string>
     <string name="no_lyrics">没有找到匹配的外挂歌词或字幕</string>
+    <string name="lyrics_status_not_linked">这首歌曲还没有关联歌词文件。可以在线搜索，或选择本地的 LRC/SRT/VTT 文件。</string>
+    <string name="lyrics_status_unreadable">无法打开已关联的歌词文件：它可能已被移动或删除，也可能该文件夹尚未授权。</string>
+    <string name="lyrics_status_unsupported">不支持这个歌词文件的格式。请使用 LRC、SRT 或 VTT。</string>
+    <string name="lyrics_status_empty">歌词文件是空的。</string>
+    <string name="lyrics_status_no_timestamps">歌词文件只有文字，没有时间戳，因此无法跟随播放滚动。请使用带 [mm:ss.xx] 时间戳的 LRC 文件。</string>
+    <string name="lyrics_status_metadata_only">歌词文件只有 [ti:]、[ar:] 这类标签行，没有带时间的歌词内容。</string>
+    <string name="lyrics_status_disabled">设置中已关闭「自动加载外挂歌词」。</string>
     <string name="play">播放</string>
     <string name="pause">暂停</string>
     <string name="previous">上一首</string>

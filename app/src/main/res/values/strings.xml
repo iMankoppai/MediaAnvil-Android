@@ -7,6 +7,13 @@
     <string name="storage_access_hint">MediaAnvil reads local audio through the system media library, so it only needs permission to read audio files. To save lyrics or edit tags it will ask you to pick the folder once. Nothing is uploaded.</string>
     <string name="no_tracks">No supported audio files were found.</string>
     <string name="no_lyrics">No matching sidecar lyrics or subtitles</string>
+    <string name="lyrics_status_not_linked">No lyric file is linked to this track yet. Search online, or pick a local LRC/SRT/VTT file.</string>
+    <string name="lyrics_status_unreadable">The linked lyric file could not be opened. It may have been moved or deleted, or this folder is not authorised.</string>
+    <string name="lyrics_status_unsupported">This lyric file\'s format is not supported. Use LRC, SRT or VTT.</string>
+    <string name="lyrics_status_empty">The lyric file is empty.</string>
+    <string name="lyrics_status_no_timestamps">The lyric file has text but no timestamps, so it cannot scroll in time. Use an LRC file with [mm:ss.xx] tags.</string>
+    <string name="lyrics_status_metadata_only">The lyric file only contains tag lines such as [ti:] and [ar:], with no timed lyrics.</string>
+    <string name="lyrics_status_disabled">Automatic sidecar lyric loading is turned off in Settings.</string>
     <string name="play">Play</string>
     <string name="pause">Pause</string>
     <string name="previous">Previous</string>
