@@ -119,7 +119,17 @@ object SafStorage {
         val base = track.fileName.substringBeforeLast('.', track.fileName)
         DeviceAudioLibrary.subtitleExtensions.forEach { extension ->
             // "song.mp3.lrc" wins over "song.lrc", matching the previous scanner.
-            listOf("${track.fileName}.$extension", "$base.$extension").forEach { candidate ->
+            //
+            // The ".txt" forms cover files a provider stored under an extension it
+            // derived from the MIME type — see [renamedTo]. They are accepted on read
+            // and on delete so that lyrics saved before that was corrected, or saved
+            // somewhere the rename is refused, still work instead of going missing.
+            listOf(
+                "${track.fileName}.$extension",
+                "$base.$extension",
+                "${track.fileName}.$extension.txt",
+                "$base.$extension.txt",
+            ).forEach { candidate ->
                 folder.findFile(candidate)?.let { return it.uri to extension }
             }
         }
@@ -148,13 +158,35 @@ object SafStorage {
         }
         val created = folder.createFile(mimeTypeFor(extension), target)
             ?: error("lyrics_create_failed")
-        context.contentResolver.openOutputStream(created.uri, "wt")?.use { output ->
+        // A provider may rename what it was given: asking for "song.lrc" with the
+        // text/plain MIME type yields "song.lrc.txt", because the extension is derived
+        // from the MIME type rather than taken from the requested name. The rest of the
+        // app finds and deletes sidecars *by name*, so a file under the wrong name is
+        // silently invisible on the next scan and cannot be deleted. Put the name back.
+        val document = created.renamedTo(context, target)
+        context.contentResolver.openOutputStream(document.uri, "wt")?.use { output ->
             output.write(bytes)
         } ?: error("lyrics_write_failed")
         check(
-            context.contentResolver.openInputStream(created.uri)?.use { it.read() } != null,
+            context.contentResolver.openInputStream(document.uri)?.use { it.read() } != null,
         ) { "lyrics_write_failed" }
-        return created.uri
+        return document.uri
+    }
+
+    /**
+     * Returns a document called [wanted], renaming [this] if the provider stored it
+     * under a different name.
+     *
+     * A failed rename is not fatal: the lyrics are still written, and both the lookup
+     * and the delete check accept the ".txt" form a provider may have appended, so the
+     * file stays usable even when the rename is refused.
+     */
+    private fun DocumentFile.renamedTo(context: Context, wanted: String): DocumentFile {
+        if (name == wanted) return this
+        val renamed = runCatching { renameTo(wanted) }.getOrDefault(false)
+        if (!renamed) return this
+        // The document URI survives a rename; re-read it so [name] is not the stale one.
+        return runCatching { DocumentFile.fromSingleUri(context, uri) }.getOrNull() ?: this
     }
 
     /**
@@ -163,11 +195,20 @@ object SafStorage {
      * remove the track it belongs to.
      */
     internal fun isSafeSubtitleName(name: String, audioFileName: String?): Boolean {
-        val extension = name.substringAfterLast('.', "").lowercase()
-        if (extension !in DeviceAudioLibrary.subtitleExtensions) return false
+        if (name.isBlank()) return false
         if (audioFileName != null && name.equals(audioFileName, ignoreCase = true)) return false
-        return name.isNotBlank()
+        if (hasLyricExtension(name)) return true
+        // A provider may derive the stored extension from the MIME type, so a request
+        // for "song.lrc" as text/plain lands as "song.lrc.txt". The app wrote that file
+        // and has to be able to delete it again; dropping one trailing ".txt" recognises
+        // it without loosening the rule for anything else.
+        return name.endsWith(".txt", ignoreCase = true) &&
+            hasLyricExtension(name.dropLast(4))
     }
+
+    /** True when [name] ends in one of the lyric extensions this app writes. */
+    private fun hasLyricExtension(name: String): Boolean =
+        DeviceAudioLibrary.subtitleExtensions.any { name.endsWith(".$it", ignoreCase = true) }
 
     /**
      * Deletes a sidecar file. Only files this app is allowed to treat as lyrics are

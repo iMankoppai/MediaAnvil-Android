@@ -54,4 +54,28 @@ class SafStorageTest {
         assertFalse(SafStorage.isSafeSubtitleName("song.flac", "song.mp3"))
         assertFalse(SafStorage.isSafeSubtitleName("", "song.mp3"))
     }
+
+    @Test
+    fun `a provider-appended txt suffix stays deletable`() {
+        // Asking for "song.lrc" with the text/plain MIME type can be stored as
+        // "song.lrc.txt" — observed on a real device, and the reason lyrics appeared
+        // saved but could not be deleted or found again. The app wrote the file, so it
+        // has to be able to remove it.
+        assertTrue(SafStorage.isSafeSubtitleName("song.lrc.txt", "song.mp3"))
+        assertTrue(SafStorage.isSafeSubtitleName("song.mp3.lrc.txt", "song.mp3"))
+        assertTrue(SafStorage.isSafeSubtitleName("song.srt.txt", "song.mp3"))
+        assertTrue(SafStorage.isSafeSubtitleName("song.lrc.TXT", "song.mp3"))
+    }
+
+    @Test
+    fun `the txt allowance does not admit anything else`() {
+        // A plain text file is not lyrics, and only one appended suffix is forgiven.
+        assertFalse(SafStorage.isSafeSubtitleName("song.txt", "song.mp3"))
+        assertFalse(SafStorage.isSafeSubtitleName("song.lrc.txt.txt", "song.mp3"))
+        assertFalse(SafStorage.isSafeSubtitleName(".txt", "song.mp3"))
+        // The audio file stays off limits even if it is named like lyrics.
+        assertFalse(SafStorage.isSafeSubtitleName("song.lrc.txt", "song.lrc.txt"))
+        // Ending in a lyric extension is what matters, whatever comes before it.
+        assertTrue(SafStorage.isSafeSubtitleName("song.txt.lrc", "song.mp3"))
+    }
 }
