@@ -38,7 +38,13 @@
     <string name="tab_player">播放</string>
     <string name="tab_settings">设置</string>
     <string name="tab_music">列表</string>
+    <string name="tab_favorites">收藏</string>
+    <string name="tab_recent">最近播放</string>
     <string name="tab_groups">分组</string>
+    <string name="favorite_add">加入收藏</string>
+    <string name="favorite_remove">取消收藏</string>
+    <string name="favorites_empty">还没有收藏。点击歌曲上的爱心即可加入。</string>
+    <string name="recent_empty">还没有播放记录。播放过的歌曲会显示在这里。</string>
     <string name="search">搜索</string>
     <string name="search_hint">搜索歌曲、歌手或文件名</string>
     <string name="view_songs">歌曲</string>

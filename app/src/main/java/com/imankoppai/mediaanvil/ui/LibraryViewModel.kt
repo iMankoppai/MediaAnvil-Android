@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.imankoppai.mediaanvil.data.DeviceAudioLibrary
+import com.imankoppai.mediaanvil.data.FavoriteTracks
 import com.imankoppai.mediaanvil.data.LibraryCache
 import com.imankoppai.mediaanvil.data.LibraryScan
 import com.imankoppai.mediaanvil.data.PlaybackPreferences
@@ -127,13 +128,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun reloadAfterPreferencesRestore() {
         trackGroups = preferences.trackGroups
         hiddenTrackUris = preferences.hiddenTrackUris
+        favoriteTrackUris = preferences.favoriteTrackUris
+        playHistory = preferences.playHistory()
         rescan(quiet = false)
     }
 
     fun createGroup(name: String): Boolean {
         val clean = name.trim()
         if (clean.isEmpty() || trackGroups.any { it.name.equals(clean, ignoreCase = true) }) return false
-        trackGroups = trackGroups + TrackGroup(java.util.UUID.randomUUID().toString(), clean, emptySet())
+        trackGroups = trackGroups + TrackGroup(java.util.UUID.randomUUID().toString(), clean, emptyList())
         preferences.trackGroups = trackGroups
         return true
     }
@@ -151,15 +154,61 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         preferences.trackGroups = trackGroups
     }
 
-    fun setGroupTracks(id: String, uris: Set<String>) {
-        trackGroups = trackGroups.map { if (it.id == id) it.copy(trackUris = uris) else it }
+    /** Replaces a group's tracks; the given order becomes the playback order. */
+    fun setGroupTracks(id: String, uris: List<String>) {
+        val cleaned = uris.filter { it.isNotBlank() }.distinct()
+        trackGroups = trackGroups.map { if (it.id == id) it.copy(trackUris = cleaned) else it }
         preferences.trackGroups = trackGroups
+    }
+
+    /** Appends tracks the user selected, keeping their existing order first. */
+    fun addTracksToGroup(id: String, uris: Collection<String>) {
+        val group = trackGroups.firstOrNull { it.id == id } ?: return
+        setGroupTracks(id, group.trackUris + uris)
     }
 
     fun removeTrackFromGroup(id: String, uri: Uri) {
         val group = trackGroups.firstOrNull { it.id == id } ?: return
         setGroupTracks(id, group.trackUris - uri.toString())
     }
+
+    /** A group's still-available tracks, in the order the user arranged them. */
+    fun tracksInGroup(group: TrackGroup): List<AudioTrack> =
+        LibraryQuery.resolve(tracks, { it.uri.toString() }, group.trackUris)
+
+    /** Favourites mirrored into preferences, in the order the user added them. */
+    var favoriteTrackUris by mutableStateOf(preferences.favoriteTrackUris)
+        private set
+
+    fun isFavorite(uri: Uri): Boolean = uri.toString() in favoriteTrackUris
+
+    fun toggleFavorite(uri: Uri) {
+        favoriteTrackUris = FavoriteTracks.toggle(favoriteTrackUris, uri.toString())
+        preferences.favoriteTrackUris = favoriteTrackUris
+    }
+
+    /** Still-available favourites in saved order; missing audio is skipped. */
+    val favoriteTracks: List<AudioTrack>
+        get() = LibraryQuery.resolve(tracks, { it.uri.toString() }, favoriteTrackUris)
+
+    /** Newest-first playback history, written by the playback service. */
+    var playHistory by mutableStateOf(preferences.playHistory())
+        private set
+
+    /** Records a track as played and refreshes the visible history. */
+    fun recordPlayed(uri: String) {
+        preferences.recordPlayed(uri)
+        playHistory = preferences.playHistory()
+    }
+
+    /** Re-reads the history so a track recorded by the service shows up here. */
+    fun refreshPlayHistory() {
+        playHistory = preferences.playHistory()
+    }
+
+    /** Recently played tracks that are still accessible, newest first. */
+    val recentTracks: List<AudioTrack>
+        get() = LibraryQuery.resolve(tracks, { it.uri.toString() }, playHistory.map { it.uri })
 
     val selectedTrack: AudioTrack? get() = tracks.getOrNull(selectedIndex)
 

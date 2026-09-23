@@ -36,6 +36,7 @@ class PlaybackService : MediaSessionService() {
     private var stopAfterTrackEnd = false
     private var closeAfterSleepStop = false
     private var lastResumeSaveAt = 0L
+    private var lastRecordedPlayUri: String? = null
     private var lastButtonClickAt = 0L
     private var pendingSinglePress: Runnable? = null
 
@@ -124,6 +125,18 @@ class PlaybackService : MediaSessionService() {
         if (closeAfterSleepStop) closeForSleep()
     }
 
+    /**
+     * Appends the current track to the recent-played history. The service owns this
+     * write so the list is correct even when playback started from the notification,
+     * the widget, or a restored queue with no screen attached.
+     */
+    private fun recordPlayed(item: MediaItem?) {
+        val id = item?.mediaId ?: return
+        if (id == lastRecordedPlayUri) return
+        lastRecordedPlayUri = id
+        runCatching { preferences.recordPlayed(id) }
+    }
+
     private val wrapAroundListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             val player = mediaSession?.player ?: return
@@ -189,11 +202,16 @@ class PlaybackService : MediaSessionService() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (!isPlaying) {
                     mediaSession?.player?.let { saveResumeState(it, force = true) }
+                } else {
+                    recordPlayed(player.currentMediaItem)
                 }
                 updateWidget()
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // A queue restored after process death also reports a transition, so
+                // only a track that is actually meant to play counts as played.
+                if (player.playWhenReady) recordPlayed(mediaItem)
                 updateWidget()
             }
         })

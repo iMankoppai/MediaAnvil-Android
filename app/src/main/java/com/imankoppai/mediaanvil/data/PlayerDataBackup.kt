@@ -6,7 +6,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object PlayerDataBackup {
-    private const val SCHEMA_VERSION = 1
+    /** 1 = V1.02 (groups/hidden/covers/offsets), 2 = adds favourites and play history. */
+    private const val SCHEMA_VERSION = 2
+
+    /** Versions this build can still read, so a V1.02 backup restores intact. */
+    private val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2)
 
     fun export(context: Context, destination: Uri, preferences: PlaybackPreferences) {
         val output = JSONObject()
@@ -28,12 +32,14 @@ object PlayerDataBackup {
                     put(JSONObject()
                         .put("id", group.id)
                         .put("name", group.name)
-                        .put("trackUris", JSONArray(group.trackUris.toList())))
+                        .put("trackUris", JSONArray(group.trackUris)))
                 }
             })
             .put("hiddenTrackUris", JSONArray(preferences.hiddenTrackUris.toList()))
             .put("customCovers", preferences.customCoversJson())
             .put("lyricsOffsets", preferences.lyricsOffsetsJson())
+            .put("favoriteTrackUris", JSONArray(preferences.favoriteTrackUris))
+            .put("playHistory", preferences.playHistoryRaw)
 
         checkNotNull(context.contentResolver.openOutputStream(destination, "wt")).use { stream ->
             stream.writer(Charsets.UTF_8).use { it.write(output.toString(2)) }
@@ -45,7 +51,7 @@ object PlayerDataBackup {
             stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         }
         preferences.restoreFromBackup(JSONObject(raw).also { root ->
-            check(root.optInt("schemaVersion", -1) == SCHEMA_VERSION) { "unsupported_schema" }
+            check(root.optInt("schemaVersion", -1) in SUPPORTED_SCHEMA_VERSIONS) { "unsupported_schema" }
             check(root.has("settings") && root.has("groups")) { "invalid_backup" }
         })
     }

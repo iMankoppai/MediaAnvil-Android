@@ -209,7 +209,12 @@ class PlaybackPreferences(context: Context) {
             preferences.edit().putString("library_sort", value).apply()
         }
 
-    /** User-created local groups containing stable SAF document URIs. */
+    /**
+     * User-created local groups containing stable SAF document URIs. The stored order
+     * of `trackUris` is the playback order, so it is read back as a list and
+     * de-duplicated without re-sorting. Groups written by V1.02 stored a set, which
+     * reads back here in its previous (insertion) order.
+     */
     var trackGroups: List<TrackGroup>
         get() {
             val raw = preferences.getString("track_groups", null) ?: return emptyList()
@@ -221,8 +226,11 @@ class PlaybackPreferences(context: Context) {
                     TrackGroup(
                         id = item.getString("id"),
                         name = item.getString("name"),
-                        trackUris = buildSet {
-                            for (uriIndex in 0 until uris.length()) add(uris.getString(uriIndex))
+                        trackUris = buildList {
+                            for (uriIndex in 0 until uris.length()) {
+                                val uri = uris.optString(uriIndex)
+                                if (uri.isNotEmpty() && uri !in this) add(uri)
+                            }
                         },
                     )
                 }
@@ -235,11 +243,55 @@ class PlaybackPreferences(context: Context) {
                     org.json.JSONObject()
                         .put("id", group.id)
                         .put("name", group.name)
-                        .put("trackUris", org.json.JSONArray(group.trackUris.toList())),
+                        .put("trackUris", org.json.JSONArray(group.trackUris.distinct())),
                 )
             }
             preferences.edit().putString("track_groups", array.toString()).apply()
         }
+
+    /** Favourited track uris, in the order the user added them. */
+    var favoriteTrackUris: List<String>
+        get() {
+            val raw = preferences.getString("favorite_track_uris", null) ?: return emptyList()
+            return runCatching {
+                val array = org.json.JSONArray(raw)
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val uri = array.optString(index)
+                        if (uri.isNotEmpty() && uri !in this) add(uri)
+                    }
+                }
+            }.getOrDefault(emptyList())
+        }
+        set(value) {
+            preferences.edit()
+                .putString("favorite_track_uris", org.json.JSONArray(value.distinct()).toString())
+                .apply()
+        }
+
+    /** Newest-first playback history, written by the playback service. */
+    var playHistoryRaw: String
+        get() = preferences.getString("play_history", "") ?: ""
+        set(value) {
+            preferences.edit().putString("play_history", value).apply()
+        }
+
+    fun playHistory(): List<PlayHistory.Entry> = PlayHistory.decode(playHistoryRaw)
+
+    fun setPlayHistory(entries: List<PlayHistory.Entry>) {
+        playHistoryRaw = PlayHistory.encode(entries)
+    }
+
+    /**
+     * Adds one played track. [force] makes the write synchronous so a track that is
+     * recorded right before the process dies is not lost.
+     */
+    fun recordPlayed(uri: String, playedAt: Long = System.currentTimeMillis(), force: Boolean = false) {
+        if (uri.isBlank()) return
+        val updated = PlayHistory.record(playHistory(), uri, playedAt)
+        val editor = preferences.edit().putString("play_history", PlayHistory.encode(updated))
+        if (force) editor.commit() else editor.apply()
+    }
 
     /** Tracks hidden from the player library; the underlying documents are untouched. */
     var hiddenTrackUris: Set<String>
@@ -315,14 +367,22 @@ class PlaybackPreferences(context: Context) {
             TrackGroup(
                 id = item.getString("id"),
                 name = item.getString("name"),
-                trackUris = buildSet {
-                    for (uriIndex in 0 until uris.length()) add(uris.getString(uriIndex))
+                // Keeps the backup's order: that order is the playback order.
+                trackUris = buildList {
+                    for (uriIndex in 0 until uris.length()) {
+                        val uri = uris.optString(uriIndex)
+                        if (uri.isNotEmpty() && uri !in this) add(uri)
+                    }
                 },
             )
         }
         val hidden = root.optJSONArray("hiddenTrackUris") ?: JSONArray()
         val covers = root.optJSONObject("customCovers") ?: JSONObject()
         val offsets = root.optJSONObject("lyricsOffsets") ?: JSONObject()
+        // Backups written before V1.03 have neither list; an absent key must leave the
+        // current favourites and history alone rather than wiping them.
+        val favorites = root.optJSONArray("favoriteTrackUris")
+        val history = if (root.has("playHistory")) root.optString("playHistory") else null
 
         preferences.edit()
             .putString("language", settings.optString("language", ""))
@@ -340,7 +400,7 @@ class PlaybackPreferences(context: Context) {
                     put(JSONObject()
                         .put("id", group.id)
                         .put("name", group.name)
-                        .put("trackUris", JSONArray(group.trackUris.toList())))
+                        .put("trackUris", JSONArray(group.trackUris)))
                 }
             }.toString())
             .putStringSet("hidden_track_uris", buildSet {
@@ -348,6 +408,20 @@ class PlaybackPreferences(context: Context) {
             })
             .putString("custom_covers", covers.toString())
             .putString("lyrics_offsets", offsets.toString())
+            .apply {
+                if (favorites != null) {
+                    putString(
+                        "favorite_track_uris",
+                        JSONArray().apply {
+                            for (index in 0 until favorites.length()) {
+                                val uri = favorites.optString(index)
+                                if (uri.isNotEmpty()) put(uri)
+                            }
+                        }.toString(),
+                    )
+                }
+                if (history != null) putString("play_history", history)
+            }
             .commit()
     }
 

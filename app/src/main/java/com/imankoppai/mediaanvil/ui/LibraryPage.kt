@@ -28,6 +28,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
@@ -68,6 +70,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,8 +88,15 @@ import kotlinx.coroutines.withContext
 
 private val libraryTabs = listOf(
     R.string.tab_music,
+    R.string.tab_favorites,
+    R.string.tab_recent,
     R.string.tab_groups,
 )
+
+/** Index of the Groups tab; the others are flat track lists. */
+private const val GROUPS_TAB = 3
+private const val FAVORITES_TAB = 1
+private const val RECENT_TAB = 2
 
 private enum class MusicView { Songs, Albums, Artists }
 
@@ -151,17 +164,19 @@ internal fun LibraryPage(
 
     var sortMode by remember { mutableStateOf(library.preferences.librarySort) }
 
-    BackHandler(enabled = selectedTab == 1 && openTrackGroupId != null) {
+    BackHandler(enabled = selectedTab == GROUPS_TAB && openTrackGroupId != null) {
         openTrackGroupId = null
     }
 
     val filtered = remember(library.tracks, searchQuery, sortMode) {
         val matched = library.tracks.filter { track ->
-            val query = searchQuery.trim()
-            query.isEmpty() ||
-                track.title.contains(query, ignoreCase = true) ||
-                track.artist?.contains(query, ignoreCase = true) == true ||
-                track.fileName.contains(query, ignoreCase = true)
+            LibraryQuery.matches(
+                title = track.title,
+                artist = track.artist,
+                album = track.album,
+                fileName = track.fileName,
+                query = searchQuery,
+            )
         }
         when (sortMode) {
             "title" -> matched.sortedBy { it.title.lowercase() }
@@ -222,13 +237,35 @@ internal fun LibraryPage(
         }
 
         when (selectedTab) {
-            1 -> TrackGroupView(
+            GROUPS_TAB -> TrackGroupView(
                 library = library,
                 controller = controller,
                 openGroupId = openTrackGroupId,
                 onOpenGroup = { openTrackGroupId = it },
                 onEditTrack = onEditTrack,
             )
+            FAVORITES_TAB -> {
+                val favorites = library.favoriteTracks
+                SimpleTrackList(
+                    tracks = favorites,
+                    emptyText = stringResource(R.string.favorites_empty),
+                    library = library,
+                    controller = controller,
+                    onEditTrack = onEditTrack,
+                )
+            }
+            RECENT_TAB -> {
+                // The playback service writes the history, so re-read it on entry.
+                LaunchedEffect(Unit) { library.refreshPlayHistory() }
+                val recent = library.recentTracks
+                SimpleTrackList(
+                    tracks = recent,
+                    emptyText = stringResource(R.string.recent_empty),
+                    library = library,
+                    controller = controller,
+                    onEditTrack = onEditTrack,
+                )
+            }
             else -> Column(Modifier.fillMaxSize()) {
                 if (library.loading) {
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
@@ -368,10 +405,7 @@ internal fun LibraryPage(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .clickable {
-                                                        library.setGroupTracks(
-                                                            group.id,
-                                                            group.trackUris + selectedUris,
-                                                        )
+                                                        library.addTracksToGroup(group.id, selectedUris)
                                                         groupDialogOpen = false
                                                         selectionMode = false
                                                         selectedUris = emptySet()
@@ -424,6 +458,9 @@ internal fun LibraryPage(
                                             },
                                             onEdit = { onEditTrack(track) },
                                             onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
+                                            isFavorite = library.isFavorite(track.uri),
+                                            onToggleFavorite = { library.toggleFavorite(track.uri) },
+                                            highlight = searchQuery,
                                         )
                                     }
                                     item { Spacer(Modifier.height(96.dp)) }
@@ -651,8 +688,10 @@ private fun TrackGroupView(
             }
         }
     } else {
+        // Resolved through the saved uri order, so the list plays back in the order
+        // the user arranged rather than in library order.
         val groupTracks = remember(library.tracks, openGroup.trackUris) {
-            library.tracks.filter { it.uri.toString() in openGroup.trackUris }
+            library.tracksInGroup(openGroup)
         }
         var menuOpen by remember(openGroup.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxSize()) {
@@ -710,6 +749,8 @@ private fun TrackGroupView(
                             onEdit = { onEditTrack(track) },
                             onRemoveFromGroup = { library.removeTrackFromGroup(openGroup.id, track.uri) },
                             onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
+                            isFavorite = library.isFavorite(track.uri),
+                            onToggleFavorite = { library.toggleFavorite(track.uri) },
                         )
                     }
                     item { Spacer(Modifier.height(96.dp)) }
@@ -775,10 +816,10 @@ private fun TrackGroupView(
 private fun GroupTrackPicker(
     group: TrackGroup,
     tracks: List<AudioTrack>,
-    onSave: (Set<String>) -> Unit,
+    onSave: (List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var selected by remember(group.id, group.trackUris) { mutableStateOf(group.trackUris) }
+    var selected by remember(group.id, group.trackUris) { mutableStateOf(group.trackUris.toSet()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.group_choose_tracks, group.name)) },
@@ -818,7 +859,13 @@ private fun GroupTrackPicker(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(selected) }) { Text(stringResource(R.string.save)) }
+            TextButton(onClick = {
+                // Keep the group's existing order, then append whatever the picker
+                // added, so saving from the picker never reshuffles the playlist.
+                val ordered = group.trackUris.filter { it in selected } +
+                    tracks.map { it.uri.toString() }.filter { it in selected && it !in group.trackUris }
+                onSave(ordered)
+            }) { Text(stringResource(R.string.save)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
@@ -905,6 +952,8 @@ private fun GroupBrowser(
                         onClick = { playFromLibrary(library, controller, groupTracks.indexOf(track), groupTracks) },
                         onEdit = { onEditTrack(track) },
                         onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
+                        isFavorite = library.isFavorite(track.uri),
+                        onToggleFavorite = { library.toggleFavorite(track.uri) },
                     )
                 }
                 item { Spacer(Modifier.height(96.dp)) }
@@ -926,6 +975,9 @@ private fun TrackRow(
     selected: Boolean = false,
     onToggleSelect: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    highlight: String = "",
 ) {
     var actionsOpen by remember(track.uri) { mutableStateOf(false) }
     Row(
@@ -953,12 +1005,11 @@ private fun TrackRow(
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                track.title,
+            HighlightedText(
+                text = track.title,
+                highlight = highlight,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 track.artist ?: stringResource(R.string.unknown_artist),
@@ -972,6 +1023,21 @@ private fun TrackRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        if (!selectable && onToggleFavorite != null) {
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = stringResource(
+                        if (isFavorite) R.string.favorite_remove else R.string.favorite_add,
+                    ),
+                    tint = if (isFavorite) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         }
         if (!selectable && (onEdit != null || onRemoveFromGroup != null || onRemoveFromPlayer != null)) {
             Box {
@@ -1010,6 +1076,45 @@ private fun TrackRow(
             }
         }
     }
+}
+
+/**
+ * Renders [text] with every occurrence of the search terms picked out in the primary
+ * colour, so a match is visible even when it sits in a field the row does not show.
+ */
+@Composable
+private fun HighlightedText(
+    text: String,
+    highlight: String,
+    style: TextStyle,
+    fontWeight: FontWeight = FontWeight.Normal,
+) {
+    val terms = remember(highlight) {
+        highlight.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    }
+    val annotated: AnnotatedString = remember(text, terms) {
+        if (terms.isEmpty()) {
+            AnnotatedString(text)
+        } else {
+            buildAnnotatedString {
+                append(text)
+                terms.forEach { term ->
+                    var from = text.indexOf(term, ignoreCase = true)
+                    while (from >= 0) {
+                        addStyle(SpanStyle(fontWeight = FontWeight.Bold), from, from + term.length)
+                        from = text.indexOf(term, from + term.length, ignoreCase = true)
+                    }
+                }
+            }
+        }
+    }
+    Text(
+        annotated,
+        style = style,
+        fontWeight = fontWeight,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 private fun removeTrackFromPlayer(
@@ -1113,6 +1218,40 @@ private fun MiniPlayer(
                 )
             }
         }
+    }
+}
+
+/**
+ * A flat, playable list used by the Favourites and Recently played tabs. The order is
+ * the caller's: favourites keep their saved order and history stays newest first, and
+ * entries whose audio is gone were already dropped, so tapping always starts a valid
+ * queue in exactly the order shown.
+ */
+@Composable
+private fun SimpleTrackList(
+    tracks: List<AudioTrack>,
+    emptyText: String,
+    library: LibraryViewModel,
+    controller: androidx.media3.session.MediaController?,
+    onEditTrack: (AudioTrack) -> Unit,
+) {
+    if (tracks.isEmpty()) {
+        SectionPlaceholder(emptyText)
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        itemsIndexed(tracks, key = { _, track -> track.uri.toString() }) { _, track ->
+            TrackRow(
+                track = track,
+                current = track.uri == library.selectedTrack?.uri,
+                onClick = { playFromLibrary(library, controller, tracks.indexOf(track), tracks) },
+                onEdit = { onEditTrack(track) },
+                onRemoveFromPlayer = { removeTrackFromPlayer(library, controller, track) },
+                isFavorite = library.isFavorite(track.uri),
+                onToggleFavorite = { library.toggleFavorite(track.uri) },
+            )
+        }
+        item { Spacer(Modifier.height(96.dp)) }
     }
 }
 
