@@ -120,6 +120,28 @@ class Phase2PersistenceTest {
     }
 
     @Test
+    fun rapidSuccessiveWritesAllSurviveARestart() {
+        val preferences = PlaybackPreferences(context)
+        // Each recordPlayed() captures the history as it stands and writes the whole
+        // list back. Three plays in a row therefore schedule three writes whose values
+        // are cumulative, and if those writes may complete in any order the oldest can
+        // land last and overwrite the newer history with the older one.
+        //
+        // CI caught exactly that: after uri-1, uri-2, uri-1 the restarted history was
+        // [uri-1] - the state after the *first* write, meaning the first write had run
+        // last. This test does the same thing with enough writes that a reordering has
+        // many chances to show up.
+        repeat(50) { index ->
+            preferences.recordPlayed("uri-$index", playedAt = (index + 1) * 100L)
+        }
+
+        val entries = afterRestart().playHistory()
+        assertEquals("lost play history entries", 50, entries.size)
+        // Newest first: the last recorded track must be at the front.
+        assertEquals("uri-49", entries.first().uri)
+    }
+
+    @Test
     fun historyEntriesForMissingAudioDoNotBreakResume() {
         val preferences = PlaybackPreferences(context)
         preferences.recordPlayed("gone", playedAt = 100L)

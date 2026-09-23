@@ -73,7 +73,25 @@ internal class SettingsStore private constructor(
     private val values: MutableMap<String, Any?>,
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * Writes are queued one behind the other so they reach the DataStore in the order
+     * their callers issued them.
+     *
+     * The dispatcher alone is not enough. `Dispatchers.IO` is a pool, and a coroutine
+     * suspends inside `edit`, so a later write can start while an earlier one is still
+     * in flight and the two can finish in either order. That is not hypothetical: CI
+     * saw a restarted play history of `[uri-1]` after playing uri-1, uri-2, uri-1 —
+     * the write holding the *shortest* list had landed last, so the record of the
+     * later plays was lost. Each write therefore waits for the previous one.
+     * `limitedParallelism(1)` keeps the waiting queue from occupying the whole pool.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+
+    /** Guards [lastQueuedWrite]. */
+    private val queueLock = Any()
+
+    /** The most recently queued write; the next write waits for it before starting. */
+    private var lastQueuedWrite: Job? = null
     private val listeners = CopyOnWriteArrayList<(String) -> Unit>()
 
     /**
@@ -119,14 +137,21 @@ internal class SettingsStore private constructor(
         if (entries.isEmpty()) return
         synchronized(values) { values.putAll(entries) }
         entries.keys.forEach(::notifyListeners)
-        val persist: suspend () -> Unit = { dataStore.edit { it.writeEntries(entries) } }
-        if (synchronous) {
-            runCatching { runBlocking { persist() } }
-        } else {
-            val job = scope.launch { runCatching { persist() } }
-            pendingWrites += job
-            job.invokeOnCompletion { pendingWrites -= job }
+
+        // Chain onto the previous write so this one cannot overtake it, and record the
+        // new tail of the chain for the next caller. Both the async and the synchronous
+        // path go through the same chain, so a synchronous write cannot jump the queue
+        // either.
+        val job = synchronized(queueLock) {
+            val previous = lastQueuedWrite
+            scope.launch {
+                previous?.join()
+                runCatching { dataStore.edit { it.writeEntries(entries) } }
+            }.also { lastQueuedWrite = it }
         }
+        pendingWrites += job
+        job.invokeOnCompletion { pendingWrites -= job }
+        if (synchronous) runCatching { runBlocking { job.join() } }
     }
 
     /**
@@ -162,10 +187,19 @@ internal class SettingsStore private constructor(
             }
 
         /**
-         * Drops the cached store so the next [get] re-reads and re-runs the migration
-         * check. Instrumented tests use this to stand in for an app restart, which is
-         * the only way to prove the migration is idempotent inside one process.
+         * Builds a store around [dataStore] with no Context and no migration.
+         *
+         * Write ordering is a concurrency property, and waiting for a race to reproduce
+         * on a device is not a test. This seam lets a JVM test supply a DataStore that
+         * finishes writes in a chosen order and then check what actually reached disk.
          */
+        @androidx.annotation.VisibleForTesting
+        internal fun forTests(dataStore: DataStore<Preferences>): SettingsStore =
+            SettingsStore(dataStore, LinkedHashMap())
+
+        /** Drops the cached store so the next [get] re-reads and re-runs the migration
+         * check. Instrumented tests use this to stand in for an app restart, which is
+         * the only way to prove the migration is idempotent inside one process. */
         @androidx.annotation.VisibleForTesting
         internal fun resetForTests() {
             synchronized(this) { instance = null }
