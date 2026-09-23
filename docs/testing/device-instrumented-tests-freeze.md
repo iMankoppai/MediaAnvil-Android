@@ -17,60 +17,72 @@
 事件缓冲区里有一行决定性证据：
 
 ```
-am_proc_start:  [0,19512,10489,com.imankoppai.mediaanvil.debug,added application]   # 19:09:34
-am_app_frozen:  [0,10489,com.imankoppai.mediaanvil.debug,from fast_freezer]        # 19:09:40
+am_proc_start:  [0,12310,10489,com.imankoppai.mediaanvil.debug,added application]   # 20:34:07
+am_app_frozen:  [0,10489,com.imankoppai.mediaanvil.debug,from fast_freezer]        # 20:34:12
 ```
 
-进程启动约 **5–6 秒**后被 vivo 自己的 `fast_freezer` 冻结。而 AndroidJUnitRunner
-在这段时间里正要把测试宿主 Activity 拉起来，进程一被冻结，后续调度全部停摆 ——
-于是表现为「永远卡住、0% CPU、无日志」。
+进程启动约 **5 秒**后被 vivo 自己的 `fast_freezer` 冻结。而 AndroidJUnitRunner 在这段时间里
+正要把测试宿主 Activity 拉起来 —— 进程一冻，后续调度全部停摆。实测确认：不干预时**等待 16 秒
+Activity 也从未出现**，主屏始终在最前，且该进程 CPU 时间完全不增长。
 
-注意 **`settings put global cached_apps_freezer disabled` 无效**。该设置是 AOSP 的机制，
-`fast_freezer` 是 vivo 自研的，会忽略它（已实测：关闭后仍出现 `from fast_freezer`）。
-所以「关掉系统里的应用冻结」这条路走不通。
+## 试过但无效的办法
 
-## 解法：先把进程预热到前台
+| 办法 | 结果 |
+| --- | --- |
+| `settings put global cached_apps_freezer disabled` | **无效**。那是 AOSP 的机制，`fast_freezer` 是 vivo 自研的，忽略它 |
+| `am set-standby-bucket <pkg> active` | 无效 |
+| `cmd appops set <pkg> RUN_IN_BACKGROUND allow` | 无效 |
+| 启动前台服务 | 无效。本 App 的服务只在播放时进入前台，进程仍是可冻结候选 |
+| **先预热 Activity，再跑 instrument** | **无效**。`am instrument` 会杀掉并重建进程，预热好的 Activity 随之消失（日志里可见 `am_uid_stopped` → 新 `am_proc_start` → `wm_task_removed`） |
+| 持续注入输入事件 | 无效 |
 
-前台进程不会被冻结。在启动 instrumentation 之前，先显式启动测试宿主 Activity：
+## 有效解法：在启动窗口内反复拉起宿主 Activity
 
 ```sh
-adb shell am start -n com.imankoppai.mediaanvil.debug/androidx.activity.ComponentActivity
+am start -f 0x20000000 -n <pkg>/androidx.activity.ComponentActivity
 ```
 
-关键证据：直接 `am start` 该 Activity 能成功拿到焦点，且**这次进程没有被冻结**
-（事件日志里只冻结了别的包）。预热之后再跑测试，从「永久卡死」变成 **1.177 秒通过**。
+要点有两处，缺一不可：
 
-`tools/run-instrumented-tests.sh` 已把这个步骤固化：
+1. **必须反复戳，而不是只戳一次**。冻结发生在启动后约 5 秒，而"拉起 Activity"这个动作需要
+   持续到测试自己接管为止。
+2. **必须带 `FLAG_ACTIVITY_SINGLE_TOP`（`0x20000000`）**。不带的话每次戳都会叠一个新的
+   `ComponentActivity` 实例；测试框架用的也是同一个类，多余实例会让使用
+   `StateRestorationTester` 的那条测试报
+   `No such compose hierarchies found in the app`。带上该标志则复用同一实例。
+
+另外，**必须先唤醒并解锁**：屏幕休眠时 Activity 拿不到窗口（日志里是
+`Focus leaving ... reason=NO_WINDOW`），进程照样被判定为后台而被冻。
+
+`tools/run-instrumented-tests.sh` 已把这三步固化：
 
 ```sh
-tools/run-instrumented-tests.sh                                   # 全部 44 项
+tools/run-instrumented-tests.sh                                   # 全部 45 项
 tools/run-instrumented-tests.sh com.imankoppai.mediaanvil.Phase5MainThreadIoTest
 ```
 
 （需要 `bash`/`sh`；Git for Windows 自带，用 `D:\Git\bin\bash.exe` 即可。）
 
-脚本还会先唤醒并上滑解锁：锁屏状态下安装和启动 Activity 都会被系统拒绝。
-
 ## 验证结果
 
 | 场景 | 结果 |
 | --- | --- |
-| 预热后跑全部 | `OK (44 tests)`，连续 2 次复现 |
-| 预热后按类过滤 | `OK (3 tests)` |
-| 预热前 | 永久卡死（多次复现） |
+| Compose UI 测试（`MainNavigationTest`，2 项） | **连续 4 次** `OK (2 tests)` |
+| 完整套件（45 项） | **连续 3 次** `OK (45 tests)` |
+| 不干预 | 永久卡死，Activity 16 秒内从未出现 |
 
 ## 这不是 App 的缺陷
 
 - 同样的代码在 Google 模拟器（CI）上**一直是通过的**，`instrumented-tests` job 为 success。
 - 触发条件是厂商的后台冻结策略，与 App 逻辑无关。
-- 排查过程中确认过：合并清单里 `androidx.activity.ComponentActivity` 声明正常
+- 排查中确认过：合并清单里 `androidx.activity.ComponentActivity` 声明正常
   （`exported="true"`），`ui-test-manifest` 也已在 `debugImplementation` 中，
-  所以**不是**常见的「测试宿主没打进清单」那类问题。
+  所以**不是**常见的"测试宿主没打进清单"那类问题。
 
 ## 如果将来在别的厂商设备上复现
 
 按同样的顺序看三处即可定位：
 
 1. `adb shell ps -A | grep <pkg>` —— 进程在不在
-2. `adb shell cat /proc/<pid>/stat` 的 CPU 时间是否增长 —— 不增长说明没被调度
+2. `adb shell cat /proc/<pid>/stat | cut -d' ' -f14,15` —— CPU 时间是否增长；不增长说明没被调度
 3. `adb shell logcat -d -b events | grep -i freez` —— 有没有 `am_app_frozen`
