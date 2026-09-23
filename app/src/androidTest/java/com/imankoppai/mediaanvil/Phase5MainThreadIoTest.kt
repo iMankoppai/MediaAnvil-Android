@@ -1,9 +1,13 @@
 package com.imankoppai.mediaanvil
 
 import android.app.Application
+import android.content.Context
 import android.os.StrictMode
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.imankoppai.mediaanvil.data.DeviceAudioLibrary
+import com.imankoppai.mediaanvil.data.LibraryCache
+import com.imankoppai.mediaanvil.data.PlaybackPreferences
 import com.imankoppai.mediaanvil.ui.LibraryViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -11,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,6 +41,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 @RunWith(AndroidJUnit4::class)
 class Phase5MainThreadIoTest {
     private val violations = CopyOnWriteArrayList<String>()
+    private lateinit var context: Context
+
+    @org.junit.Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+    }
 
     @After
     fun tearDown() = runBlocking {
@@ -117,17 +128,29 @@ class Phase5MainThreadIoTest {
     }
 
     @Test
-    fun theLibraryActuallyLoadsSoTheThreadingChangeDidNotBreakIt() {
+    fun startupShowsTheCachedLibrary() {
         val library = viewModel()
+        // Seed a cache first, then let startup() load it. This checks that the cache
+        // read still populates the UI state now that it happens on another thread —
+        // without assuming the device has any audio on it. The CI emulator has none,
+        // and an earlier version of this test asserted a non-empty library and failed
+        // there while passing on the phone.
+        val seeded = DeviceAudioLibrary.scan(context)
+        LibraryCache.save(context, seeded)
+
         runBlocking {
             library.startup()
             awaitUntil { !library.loading }
         }
-        // The verification device has audio on it; a failure here means either the
-        // audio permission is missing or startup() stopped populating the list.
-        assertTrue(
-            "expected the library to load tracks, got ${library.tracks.size}",
-            library.tracks.isNotEmpty(),
+
+        // Hidden tracks are filtered out of the visible list, so compare against the
+        // same filter rather than the raw scan.
+        val hidden = PlaybackPreferences(context).hiddenTrackUris
+        val expected = seeded.tracks.count { it.uri.toString() !in hidden }
+        assertEquals(
+            "startup() did not show the cached library",
+            expected,
+            library.tracks.size,
         )
     }
 }
