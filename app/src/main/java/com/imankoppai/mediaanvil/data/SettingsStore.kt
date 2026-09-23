@@ -162,16 +162,35 @@ internal class SettingsStore private constructor(
             }
 
         /**
-         * Drops the cached store so the next [get] re-reads from disk and re-runs the
-         * migration check. Instrumented tests use this to stand in for an app restart,
-         * which is the only way to prove the migration is idempotent in-process.
+         * Drops the cached store so the next [get] re-reads and re-runs the migration
+         * check. Instrumented tests use this to stand in for an app restart, which is
+         * the only way to prove the migration is idempotent inside one process.
          */
         @androidx.annotation.VisibleForTesting
         internal fun resetForTests() {
             synchronized(this) { instance = null }
         }
 
-        /** Path of the DataStore file, so tests can start from a clean slate. */
+        /**
+         * Empties the DataStore between instrumented tests.
+         *
+         * Deleting the `.preferences_pb` file is not enough: `preferencesDataStore`
+         * caches its DataStore per Context, and that instance keeps the last read
+         * state in memory, so a deleted file would leave stale values visible and one
+         * test would leak into the next. Clearing through the API keeps the instance
+         * and the file consistent. The legacy SharedPreferences file must be cleared
+         * by the caller first, or the next construction would migrate it again.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun clearForTests(context: Context) {
+            synchronized(this) {
+                val store = instance ?: create(context.applicationContext).also { instance = it }
+                runCatching { runBlocking { store.dataStore.edit { it.clear() } } }
+                synchronized(store.values) { store.values.clear() }
+            }
+        }
+
+        /** Path of the DataStore file, for diagnostics in tests. */
         @androidx.annotation.VisibleForTesting
         internal fun dataStoreFile(context: Context): java.io.File =
             java.io.File(java.io.File(context.filesDir, "datastore"), "$DATA_STORE_NAME.preferences_pb")

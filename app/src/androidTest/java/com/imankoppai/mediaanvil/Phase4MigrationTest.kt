@@ -37,9 +37,14 @@ class Phase4MigrationTest {
     }
 
     private fun clearEverything() {
-        SettingsStore.resetForTests()
+        // Clear the legacy file first: constructing the store below would otherwise
+        // migrate whatever is still in it.
         context.getSharedPreferences(LEGACY, Context.MODE_PRIVATE).edit().clear().commit()
-        SettingsStore.dataStoreFile(context).delete()
+        // Clear through the DataStore API rather than deleting the file. The
+        // preferencesDataStore delegate caches one DataStore per Context and that
+        // instance keeps its last read state in memory, so deleting the file behind
+        // its back would leave stale values visible and leak one test into the next.
+        SettingsStore.clearForTests(context)
         SettingsStore.resetForTests()
     }
 

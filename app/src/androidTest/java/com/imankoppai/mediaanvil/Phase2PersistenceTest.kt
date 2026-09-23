@@ -35,18 +35,27 @@ class Phase2PersistenceTest {
 
     private fun clearPlayerData() {
         // Both stores have to go: the legacy file is what the migration reads, and the
-        // DataStore holds what it wrote. The process-wide snapshot is cached too, so it
-        // is dropped as well — otherwise one test's values would leak into the next and
-        // these assertions would depend on execution order.
+        // DataStore holds what it wrote. Clear the legacy file first so constructing
+        // the store below cannot migrate it, then clear the DataStore through its API
+        // — the preferencesDataStore delegate caches one instance per Context, so
+        // deleting the file behind its back would leave stale values in memory and
+        // make these assertions depend on execution order.
         context.getSharedPreferences("mediaanvil_playback", Context.MODE_PRIVATE)
             .edit().clear().commit()
-        com.imankoppai.mediaanvil.data.SettingsStore.resetForTests()
-        com.imankoppai.mediaanvil.data.SettingsStore.dataStoreFile(context).delete()
+        com.imankoppai.mediaanvil.data.SettingsStore.clearForTests(context)
         com.imankoppai.mediaanvil.data.SettingsStore.resetForTests()
     }
 
-    /** A new instance reads the same file, so this is what a relaunch sees. */
-    private fun afterRestart(): PlaybackPreferences = PlaybackPreferences(context)
+    /**
+     * What a relaunch sees. The store is a process-wide singleton and writes are
+     * asynchronous, so this flushes and drops the singleton — otherwise it would
+     * hand back the same in-memory map and prove nothing about persistence.
+     */
+    private fun afterRestart(): PlaybackPreferences {
+        PlaybackPreferences(context).flushPendingWrites()
+        com.imankoppai.mediaanvil.data.SettingsStore.resetForTests()
+        return PlaybackPreferences(context)
+    }
 
     @Test
     fun favoritesSurviveARestartInTheOrderTheyWereAdded() {
