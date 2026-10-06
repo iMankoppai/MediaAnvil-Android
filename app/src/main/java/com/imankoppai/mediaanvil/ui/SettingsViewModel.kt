@@ -63,6 +63,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun cancelSleepTimer() {
         preferences.sleepTimerDeadlineAt = 0L
         sleepTimerEndAt = null
+        refreshSleepTimer()
     }
 
     /** Re-reads the deadline so screens reflect a timer that fired elsewhere. */

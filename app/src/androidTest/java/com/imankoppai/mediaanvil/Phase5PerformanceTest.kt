@@ -161,6 +161,26 @@ class Phase5PerformanceTest {
     }
 
     @Test
+    fun libraryFilterAndSortOver10kTracks() {
+        val tracks = List(10_000) { index ->
+            AudioTrack(
+                uri = Uri.parse("content://media/external/audio/media/$index"),
+                fileName = "track-$index.mp3",
+                title = if (index == 42) "稻香" else "track-$index",
+                artist = if (index % 7 == 0) "DEER" else null,
+                album = if (index % 11 == 0) "Night Drive" else null,
+                durationMs = 1_000L,
+                subtitleUri = null,
+                subtitleExtension = null,
+                relativeFolder = "Music/",
+            )
+        }
+        measure("library_filter_and_sort_10k_tracks", runs = 10) {
+            LibraryQuery.filterAndSort(tracks, "稻香 deer night drive", "fileName")
+        }
+    }
+
+    @Test
     fun reportDeviceLibrarySize() {
         val scan = DeviceAudioLibrary.scan(context)
         report("device_track_count ${scan.tracks.size}")

@@ -16,28 +16,35 @@ import kotlinx.coroutines.withContext
  * parsing tags. Full-fidelity cover editing lives in the tag tools.
  */
 object CoverLoader {
-    /** Bounded memory cache so fling-scrolling the library stops re-parsing artwork. */
-    private val cache = object : android.util.LruCache<String, ImageBitmap>(128) {
-        override fun sizeOf(key: String, value: ImageBitmap): Int = 1
+    /** Keep decoded artwork under roughly 32 MB so large libraries cannot balloon memory. */
+    private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+
+    /** Library rows show a small cover; only the player needs full artwork detail. */
+    private const val THUMBNAIL_TARGET_PX = 160
+
+    private val cache = object : android.util.LruCache<String, ImageBitmap>(MAX_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int =
+            value.width * value.height * 4
     }
 
-    suspend fun load(context: Context, uri: Uri): ImageBitmap? {
-        cache.get(uri.toString())?.let { return it }
+    suspend fun load(context: Context, uri: Uri, thumbnail: Boolean): ImageBitmap? {
+        val key = if (thumbnail) "thumb:$uri" else uri.toString()
+        cache.get(key)?.let { return it }
+        val target = if (thumbnail) THUMBNAIL_TARGET_PX else 1024
         val loaded = withContext(Dispatchers.IO) {
             runCatching {
                 val retriever = MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(context, uri)
                     retriever.embeddedPicture?.let { bytes ->
-                        val bitmap = decodeScaled(bytes)
-                        bitmap?.asImageBitmap()
+                        decodeScaled(bytes, target)?.asImageBitmap()
                     }
                 } finally {
                     retriever.release()
                 }
             }.getOrNull()
         }
-        if (loaded != null) cache.put(uri.toString(), loaded)
+        if (loaded != null) cache.put(key, loaded)
         return loaded
     }
 

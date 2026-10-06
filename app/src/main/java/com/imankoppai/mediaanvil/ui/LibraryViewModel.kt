@@ -15,7 +15,10 @@ import com.imankoppai.mediaanvil.data.PlaybackPreferences
 import com.imankoppai.mediaanvil.data.SafStorage
 import com.imankoppai.mediaanvil.model.AudioTrack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -40,11 +43,20 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var message by mutableStateOf<String?>(null)
 
+    /** True when the latest scan failed and the library is showing its previous snapshot. */
+    var scanFailed by mutableStateOf(false)
+        private set
+
     /** Human-readable message for the latest playback failure, if any. */
     var playbackError by mutableStateOf<String?>(null)
 
     /** Tracks hidden from the player library, kept here so a scan can filter them out. */
     private var hiddenTrackUris: Set<String> = preferences.hiddenTrackUris
+
+    private var scanJob: Job? = null
+
+    /** Serializes cache writes so a lyric edit cannot interleave with a scan snapshot. */
+    private val cacheWriteMutex = Mutex()
 
     /**
      * True when the media library can return audio rows. This needs only the audio
@@ -92,7 +104,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** Keeps the cache in step after an in-place change such as a lyric or tag edit. */
     private fun persistCurrentScan() {
         files = LibraryScan(tracks)
-        LibraryCache.save(appContext, LibraryScan(tracks))
+        val scan = LibraryScan(tracks)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                cacheWriteMutex.withLock { LibraryCache.save(appContext, scan) }
+            }
+        }
     }
 
     /**
@@ -114,6 +131,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     fun startup() {
         hiddenTrackUris = preferences.hiddenTrackUris
         loading = tracks.isEmpty()
+        scanFailed = false
         viewModelScope.launch {
             val snapshot = withContext(Dispatchers.IO) { LibraryCache.load(appContext) }
             if (snapshot != null) {
@@ -146,10 +164,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun scanAll(quiet: Boolean, onLoaded: (Int) -> Unit = {}) {
+        if (scanJob?.isActive == true) return
         loading = !quiet
         if (!quiet) message = null
         val allowedFolders = allowedScanFolders()
-        viewModelScope.launch {
+        scanJob = viewModelScope.launch {
             val previousUri = tracks.getOrNull(selectedIndex)?.uri
             // Everything that touches the disk, the ContentResolver or the Storage
             // Access Framework happens inside this one IO block. Sidecar lookup in
@@ -157,21 +176,35 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             // the block returned — i.e. back on the main thread — so a large library
             // stalled the frame that was supposed to show the scan results.
             val result = withContext(Dispatchers.IO) {
-                val scanned = runCatching { DeviceAudioLibrary.scan(appContext, allowedFolders) }
-                    .getOrElse { LibraryScan(emptyList(), emptyList()) }
+                val scanned = try {
+                    DeviceAudioLibrary.scan(appContext, allowedFolders)
+                } catch (scanFailure: Exception) {
+                    null
+                }
+                if (scanned == null) {
+                    scanFailed = true
+                    return@withContext null
+                }
                 // Sidecar lyrics are located inside user-granted folders; without a
                 // grant the track simply shows no lyrics instead of failing the scan.
                 val withSidecars = scanned.copy(tracks = attachKnownSidecars(scanned.tracks))
                 // Keep the complete scan in cache; hidden tracks are filtered only in
                 // the UI state. This makes restoring them reliable even if the app
-                // closes during the restore scan.
-                LibraryCache.save(appContext, withSidecars)
+                // closes during the restore scan. The mutex keeps this from racing a
+                // lyric/tag edit that persisted its own snapshot.
+                cacheWriteMutex.withLock { LibraryCache.save(appContext, withSidecars) }
                 withSidecars
+            } ?: run {
+                loading = false
+                if (!quiet) message = appContext.getString(com.imankoppai.mediaanvil.R.string.scan_failed)
+                onLoaded(tracks.size)
+                return@launch
             }
             val visibleTracks = result.tracks.filterNot { it.uri.toString() in hiddenTrackUris }
             files = result.copy(tracks = visibleTracks)
             tracks = visibleTracks
             selectedIndex = visibleTracks.indexOfFirst { it.uri == previousUri }
+            scanFailed = false
             loading = false
             if (visibleTracks.isEmpty() && !quiet) {
                 message = appContext.getString(com.imankoppai.mediaanvil.R.string.no_tracks)
@@ -194,28 +227,32 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         tracks = tracks.map { track ->
             if (track.uri == uri) track.copy(title = title, artist = cleanArtist) else track
         }
-        LibraryCache.load(appContext)?.let { cached ->
-            val updatedTracks = cached.tracks.map { record ->
-                if (record.uri == uri) record.copy(title = title, artist = cleanArtist) else record
+        // Cache read/update/write is JSON file I/O; run it off the main thread.
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                cacheWriteMutex.withLock {
+                    val cached = LibraryCache.load(appContext) ?: return@withLock
+                    val updatedTracks = cached.tracks.map { record ->
+                        if (record.uri == uri) record.copy(title = title, artist = cleanArtist) else record
+                    }
+                    LibraryCache.save(
+                        appContext,
+                        LibraryScan(tracks = updatedTracks.map { record ->
+                            AudioTrack(
+                                uri = record.uri,
+                                fileName = record.fileName,
+                                title = record.title,
+                                artist = record.artist,
+                                album = record.album,
+                                durationMs = record.durationMs,
+                                subtitleUri = record.subtitleUri,
+                                subtitleExtension = record.subtitleExtension,
+                                relativeFolder = record.relativeFolder,
+                            )
+                        }),
+                    )
+                }
             }
-            LibraryCache.save(
-                appContext,
-                LibraryScan(
-                    tracks = updatedTracks.map { record ->
-                        AudioTrack(
-                            uri = record.uri,
-                            fileName = record.fileName,
-                            title = record.title,
-                            artist = record.artist,
-                            album = record.album,
-                            durationMs = record.durationMs,
-                            subtitleUri = record.subtitleUri,
-                            subtitleExtension = record.subtitleExtension,
-                            relativeFolder = record.relativeFolder,
-                        )
-                    },
-                ),
-            )
         }
         // The media library caches its own metadata row; ask it to re-read the file so a
         // later scan reports the edited title instead of the stale one.

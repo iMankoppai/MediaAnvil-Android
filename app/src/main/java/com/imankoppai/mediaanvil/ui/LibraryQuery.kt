@@ -4,6 +4,8 @@ package com.imankoppai.mediaanvil.ui
  * Pure search and ordering helpers shared by every library list. They work on plain
  * strings so the behaviour is unit testable without an Android device.
  */
+import com.imankoppai.mediaanvil.model.AudioTrack
+
 internal object LibraryQuery {
     private val whitespace = Regex("\\s+")
 
@@ -37,6 +39,28 @@ internal object LibraryQuery {
      * saved and silently skipping entries whose audio is gone. This is what makes a
      * playlist or favourite list play back in its own order rather than library order.
      */
+    /** Filters then sorts a library snapshot; shared by every list so behavior stays consistent. */
+    fun filterAndSort(
+        tracks: List<AudioTrack>,
+        query: String,
+        sortMode: String,
+    ): List<AudioTrack> {
+        val matched = tracks.filter { track ->
+            matches(
+                title = track.title,
+                artist = track.artist,
+                album = track.album,
+                fileName = track.fileName,
+                query = query,
+            )
+        }
+        return when (sortMode) {
+            "title" -> matched.sortedBy { it.title.lowercase() }
+            "duration" -> matched.sortedBy { it.durationMs }
+            else -> matched.sortedBy { it.fileName.lowercase() }
+        }
+    }
+
     fun <T> resolve(available: List<T>, key: (T) -> String, wanted: List<String>): List<T> {
         if (wanted.isEmpty() || available.isEmpty()) return emptyList()
         val byKey = available.associateBy(key)

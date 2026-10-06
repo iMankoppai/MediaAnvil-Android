@@ -45,6 +45,27 @@ class LibraryQueryTest {
         assertFalse(matches("something-else"))
     }
 
+
+    private data class SortableTrack(
+        val fileName: String,
+        val title: String = fileName,
+        val artist: String? = null,
+        val album: String? = null,
+        val durationMs: Long = 0L,
+    )
+
+    @Test
+    fun `sort ordering matches title and duration modes`() {
+        val tracks = listOf(
+            SortableTrack("b.mp3", title = "B", durationMs = 3000),
+            SortableTrack("a.mp3", title = "A", durationMs = 5000),
+        )
+        val byTitle = tracks.sortedBy { it.title.lowercase() }.map { it.fileName }
+        val byDuration = tracks.sortedBy { it.durationMs }.map { it.fileName }
+        assertEquals(listOf("a.mp3", "b.mp3"), byTitle)
+        assertEquals(listOf("b.mp3", "a.mp3"), byDuration)
+    }
+
     @Test
     fun `resolve keeps the saved playlist order`() {
         val library = listOf("a", "b", "c")

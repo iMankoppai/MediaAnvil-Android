@@ -39,6 +39,8 @@ class PlaybackService : MediaSessionService() {
     private var lastRecordedPlayUri: String? = null
     private var lastButtonClickAt = 0L
     private var pendingSinglePress: Runnable? = null
+    private var sleepFadeActive = false
+    private var sleepFadeRestoreVolume = 1.0f
 
     /** Keeps the notification buttons and the seek increments on the current settings. */
     private val preferencesListener: (String) -> Unit = { key ->
@@ -64,6 +66,7 @@ class PlaybackService : MediaSessionService() {
                 nextDelayMs = PLAYBACK_POLL_MS
             }
             mediaSession?.player?.let { player ->
+                updateSleepFade(player)
                 val active = loopEndMs > loopStartMs
                 val playing = player.isPlaying && player.currentPosition >= loopEndMs
                 // A B point at (or past) the end lets the track finish instead
@@ -189,6 +192,11 @@ class PlaybackService : MediaSessionService() {
             .setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
             .setSeekForwardIncrementMs(preferences.seekForwardSeconds * 1_000L)
             .build()
+        // The service owns the persisted playback state so notification, widget and
+        // headset paths start with the same speed/shuffle/repeat as the app UI.
+        player.playbackParameters = androidx.media3.common.PlaybackParameters(preferences.playbackSpeed)
+        player.shuffleModeEnabled = preferences.shuffleEnabled
+        player.repeatMode = preferences.repeatMode
         exoPlayer = player
         preferences.registerChangeListener(preferencesListener)
         player.addListener(object : Player.Listener {
@@ -460,6 +468,31 @@ class PlaybackService : MediaSessionService() {
     }
 
     /**
+     * Fades playback volume over the last 30 seconds of the sleep timer, then restores
+     * the normal level once the timer fires or is cancelled. The ticker already runs at
+     * about a 1-second cadence while a timer is armed, which is enough for a quiet fade.
+     */
+    private fun updateSleepFade(player: Player) {
+        val deadline = preferences.sleepTimerDeadlineAt
+        if (deadline == 0L || deadline - System.currentTimeMillis() > SLEEP_FADE_MS) {
+            if (sleepFadeActive) restoreSleepVolume(player)
+            return
+        }
+        val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(0L)
+        val fraction = remaining.toFloat() / SLEEP_FADE_MS
+        if (!sleepFadeActive) {
+            sleepFadeActive = true
+            sleepFadeRestoreVolume = player.volume
+        }
+        player.volume = sleepFadeRestoreVolume * fraction
+    }
+
+    private fun restoreSleepVolume(player: Player) {
+        sleepFadeActive = false
+        player.volume = sleepFadeRestoreVolume
+    }
+
+    /**
      * The sleep timer reached its deadline: pause now, or let the current track
      * finish first. It lives in the service so the timer keeps working across screen
      * rotation and while the app sits in the background; the screen only arms it.
@@ -467,6 +500,7 @@ class PlaybackService : MediaSessionService() {
     private fun fireSleepTimer() {
         preferences.sleepTimerDeadlineAt = 0L
         val player = mediaSession?.player
+        if (player != null && sleepFadeActive) restoreSleepVolume(player)
         if (preferences.sleepFinishTrack && player?.isPlaying == true) {
             // An active A/B loop would keep the track from ever ending.
             clearLoop()
@@ -540,5 +574,6 @@ class PlaybackService : MediaSessionService() {
         private const val PLAYBACK_POLL_MS = 1_000L
         private const val IDLE_POLL_MS = 5_000L
         private const val POSITION_SAVE_INTERVAL_MS = 15_000L
+        private const val SLEEP_FADE_MS = 30_000L
     }
 }

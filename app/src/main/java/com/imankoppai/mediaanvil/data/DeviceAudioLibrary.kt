@@ -20,6 +20,9 @@ import com.imankoppai.mediaanvil.tags.WavInfoTagIO
  * without "all files access".
  */
 object DeviceAudioLibrary {
+    /** Raised when none of the media-library audio collections could be queried. */
+    class ScanException(failures: List<Throwable>) : Exception(failures.firstOrNull()?.message, failures.firstOrNull())
+
     private val audioExtensions = setOf("mp3", "wav", "flac", "m4a", "aac", "ogg", "opus")
     val subtitleExtensions = listOf("lrc", "srt", "vtt")
 
@@ -33,6 +36,7 @@ object DeviceAudioLibrary {
 
     fun scan(context: Context, allowedFolders: Set<String> = emptySet()): LibraryScan {
         val tracks = mutableListOf<AudioTrack>()
+        val queryFailures = mutableListOf<Throwable>()
         audioCollections(context).forEach { collection ->
             // RELATIVE_PATH only exists from API 29; older devices still expose DATA,
             // which the legacy read permission covers.
@@ -52,7 +56,7 @@ object DeviceAudioLibrary {
                 }
             }.toTypedArray()
 
-            runCatching {
+            try {
                 context.contentResolver.query(collection, projection, null, null, null)?.use { cursor ->
                     val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                     val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
@@ -99,8 +103,11 @@ object DeviceAudioLibrary {
                         )
                     }
                 }
+            } catch (queryFailure: Exception) {
+                if (queryFailures.isEmpty()) queryFailures += queryFailure
             }
         }
+        if (queryFailures.isNotEmpty()) throw ScanException(queryFailures)
         return LibraryScan(
             tracks = tracks.distinctBy { it.uri }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName }),
             files = emptyList(),

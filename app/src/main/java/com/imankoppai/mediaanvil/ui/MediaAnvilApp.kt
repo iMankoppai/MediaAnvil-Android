@@ -124,10 +124,8 @@ fun MediaAnvilApp() {
         val future = MediaController.Builder(context, token).buildAsync()
         future.addListener({
             runCatching { future.get() }.onSuccess { mediaController ->
-                mediaController.playbackParameters =
-                    androidx.media3.common.PlaybackParameters(settings.preferences.playbackSpeed)
-                mediaController.shuffleModeEnabled = settings.preferences.shuffleEnabled
-                mediaController.repeatMode = settings.preferences.repeatMode
+                // Speed, shuffle and repeat are restored by the service when it creates
+                // the player, so every entry path starts from the same persisted state.
                 mediaController.addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                         library.playbackError = when (error.errorCode) {

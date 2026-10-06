@@ -6,6 +6,7 @@
     <string name="empty_no_audio_hint">手机中没有找到受支持的音频文件。</string>
     <string name="storage_access_hint">MediaAnvil 通过系统媒体库读取本地音频，因此只需要读取音频的权限。保存歌词或编辑标签时，会请你选择一次文件夹。数据只在本机处理，不会上传。</string>
     <string name="no_tracks">没有找到支持的音频文件。</string>
+    <string name="scan_failed">媒体库扫描失败，已保留上次的曲库，请重试。</string>
     <string name="no_lyrics">没有找到匹配的外挂歌词或字幕</string>
     <string name="lyrics_status_not_linked">这首歌曲还没有关联歌词文件。可以在线搜索，或选择本地的 LRC/SRT/VTT 文件。</string>
     <string name="lyrics_status_unreadable">无法打开已关联的歌词文件：它可能已被移动或删除，也可能该文件夹尚未授权。</string>
