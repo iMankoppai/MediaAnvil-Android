@@ -104,8 +104,14 @@ internal fun LyricsView(
         action?.invoke()
     }
 
-    /** Resolved during composition so the click handler never reads resources late. */
+    /** Resolved during composition so callbacks never read resources from a stale Context. */
     val needFolderText = stringResource(R.string.lyrics_need_folder)
+    val importFailedText = stringResource(R.string.lyrics_import_failed)
+    val searchFailedText = stringResource(R.string.online_lyrics_search_failed)
+    val searchNotFoundText = stringResource(R.string.online_lyrics_not_found)
+    val saveFailedText = stringResource(R.string.online_lyrics_save_failed)
+    val deletedText = stringResource(R.string.lyrics_deleted)
+    val deleteFailedText = stringResource(R.string.lyrics_delete_failed)
 
     /** Runs [action] once a granted folder covers this track, asking for one if needed. */
     fun withFolderAccess(action: () -> Unit) {
@@ -140,7 +146,7 @@ internal fun LyricsView(
                     statusMessage = null
                     android.widget.Toast.makeText(context, R.string.lyrics_imported, android.widget.Toast.LENGTH_SHORT).show()
                 }.onFailure {
-                    statusMessage = context.getString(R.string.lyrics_import_failed)
+                    statusMessage = importFailedText
                 }
             }
         }
@@ -165,8 +171,8 @@ internal fun LyricsView(
             searchFinished = true
             candidates = result.getOrDefault(emptyList())
             statusMessage = when {
-                result.isFailure -> context.getString(R.string.online_lyrics_search_failed)
-                candidates.isEmpty() -> context.getString(R.string.online_lyrics_not_found)
+                result.isFailure -> searchFailedText
+                candidates.isEmpty() -> searchNotFoundText
                 else -> null
             }
         }
@@ -194,7 +200,7 @@ internal fun LyricsView(
                         android.widget.Toast.LENGTH_SHORT,
                     ).show()
                 }.onFailure {
-                    statusMessage = context.getString(R.string.online_lyrics_save_failed)
+                    statusMessage = saveFailedText
                 }
             }
         }
@@ -588,9 +594,9 @@ internal fun LyricsView(
                             settings.preferences.setLyricsOffset(track.uri, 0L)
                             lyricsOffsetMs = 0L
                             cues = emptyList()
-                            statusMessage = context.getString(R.string.lyrics_deleted)
+                            statusMessage = deletedText
                         } else {
-                            statusMessage = context.getString(R.string.lyrics_delete_failed)
+                            statusMessage = deleteFailedText
                         }
                     }
                 }) { Text(stringResource(R.string.lyrics_delete)) }
