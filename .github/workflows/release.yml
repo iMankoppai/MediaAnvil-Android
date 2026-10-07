@@ -129,8 +129,11 @@ jobs:
           TAG: ${{ steps.package.outputs.tag }}
           APK: ${{ steps.package.outputs.apk }}
         run: |
+          NOTES="docs/releases/$TAG.md"
+          test -s "$NOTES" || { echo "Missing release notes: $NOTES"; exit 1; }
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" "$APK.sha256" --clobber
+            gh release edit "$TAG" --notes-file "$NOTES"
           else
-            gh release create "$TAG" "$APK" "$APK.sha256" --verify-tag --generate-notes --title "MediaAnvil $TAG"
+            gh release create "$TAG" "$APK" "$APK.sha256" --verify-tag --notes-file "$NOTES" --title "MediaAnvil $TAG"
           fi

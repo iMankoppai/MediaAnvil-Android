@@ -84,6 +84,8 @@ gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
+每次发布先编写 `docs/releases/v版本号.md`，记录该版本新增、修复、验证和升级说明，并与代码一起提交。发布工作流会使用这份文件作为 GitHub Release 更新说明，缺失或为空时拒绝发布。
+
 配置一次 Secrets 后，创建并推送与 `versionName` 一致的标签即可发布，例如 V1.06 使用：
 
 ```text
