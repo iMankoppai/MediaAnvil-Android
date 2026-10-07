@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -50,7 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -88,15 +89,16 @@ import kotlinx.coroutines.withContext
 
 private val libraryTabs = listOf(
     R.string.tab_music,
+    R.string.continue_listening,
     R.string.tab_favorites,
     R.string.tab_recent,
     R.string.tab_groups,
 )
 
 /** Index of the Groups tab; the others are flat track lists. */
-private const val GROUPS_TAB = 3
-private const val FAVORITES_TAB = 1
-private const val RECENT_TAB = 2
+private const val GROUPS_TAB = 4
+private const val FAVORITES_TAB = 2
+private const val RECENT_TAB = 3
 
 private enum class MusicView { Songs, Albums, Artists }
 
@@ -165,9 +167,8 @@ internal fun LibraryPage(
         openTrackGroupId = null
     }
 
-    val filtered = remember(library.tracks, searchQuery, sortMode) {
-        LibraryQuery.filterAndSort(library.tracks, searchQuery, sortMode)
-    }
+    val search = rememberLibrarySearch(library.tracks, searchQuery, sortMode)
+    val filtered = search.tracks
 
     val unknownAlbumLabel = stringResource(R.string.unknown_album)
     val unknownArtistLabel = stringResource(R.string.unknown_artist)
@@ -209,7 +210,8 @@ internal fun LibraryPage(
             },
         )
 
-        TabRow(
+        PrimaryScrollableTabRow(
+            edgePadding = 0.dp,
             selectedTabIndex = selectedTab,
             containerColor = MaterialTheme.colorScheme.background,
             contentColor = MaterialTheme.colorScheme.primary,
@@ -225,6 +227,7 @@ internal fun LibraryPage(
         }
 
         when (selectedTab) {
+            1 -> ContinueListeningPage(library, playlists, settings, controller, onEditTrack)
             GROUPS_TAB -> TrackGroupView(
                 library = library,
                 playlists = playlists,
@@ -261,7 +264,7 @@ internal fun LibraryPage(
                 )
             }
             else -> Column(Modifier.fillMaxSize()) {
-                if (library.loading) {
+                if (library.loading || search.loading) {
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 }
                 library.message?.let {
@@ -419,7 +422,9 @@ internal fun LibraryPage(
                             )
                         }
                         when (musicView) {
-                            MusicView.Songs -> if (filtered.isEmpty()) {
+                            MusicView.Songs -> if (search.loading) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                            } else if (filtered.isEmpty()) {
                                 SectionPlaceholder(stringResource(R.string.no_tracks))
                             } else {
                                 LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
@@ -986,6 +991,9 @@ internal fun TrackRow(
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     highlight: String = "",
+    detail: String? = null,
+    finished: Boolean = false,
+    onToggleFinished: (() -> Unit)? = null,
 ) {
     var actionsOpen by remember(track.uri) { mutableStateOf(false) }
     Row(
@@ -1031,6 +1039,7 @@ internal fun TrackRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            detail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
         }
         if (!selectable && onToggleFavorite != null) {
             IconButton(onClick = onToggleFavorite) {
@@ -1047,12 +1056,18 @@ internal fun TrackRow(
                 )
             }
         }
-        if (!selectable && (onEdit != null || onRemoveFromGroup != null || onRemoveFromPlayer != null)) {
+        if (!selectable && (onEdit != null || onRemoveFromGroup != null || onRemoveFromPlayer != null || onToggleFinished != null)) {
             Box {
                 IconButton(onClick = { actionsOpen = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.track_actions))
                 }
                 DropdownMenu(expanded = actionsOpen, onDismissRequest = { actionsOpen = false }) {
+                    onToggleFinished?.let { toggle ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(if (finished) R.string.mark_unfinished else R.string.mark_finished)) },
+                            onClick = { actionsOpen = false; toggle() },
+                        )
+                    }
                     onEdit?.let { edit ->
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.edit_tags)) },

@@ -20,6 +20,7 @@ data class AudioTrack(
     val subtitleUri: Uri?,
     val subtitleExtension: String?,
     val relativeFolder: String = "",
+    val sizeBytes: Long = 0L,
 )
 
 data class SubtitleCue(

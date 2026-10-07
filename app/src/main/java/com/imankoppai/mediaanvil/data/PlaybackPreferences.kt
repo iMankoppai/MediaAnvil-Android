@@ -186,6 +186,7 @@ class PlaybackPreferences(context: Context) {
         queueUris: List<String>,
         queueIndex: Int,
         synchronous: Boolean,
+        completed: Boolean = false,
     ) {
         runCatching {
             val positions = JSONObject(playbackPositions)
@@ -195,6 +196,11 @@ class PlaybackPreferences(context: Context) {
                     "playback_positions" to positions.toString(),
                     "last_queue_uris" to JSONArray(queueUris).toString(),
                     "last_queue_index" to queueIndex,
+                    "finished_track_uris" to when {
+                        completed -> finishedTrackUris + uri
+                        positionMs > 0 -> finishedTrackUris - uri
+                        else -> finishedTrackUris
+                    },
                 ),
                 synchronous = synchronous,
             )
@@ -214,6 +220,32 @@ class PlaybackPreferences(context: Context) {
         set(value) {
             store.put("last_queue_index", value)
         }
+
+    /** Metadata retained for references whose files are temporarily unavailable. */
+    internal var backupTrackReferences: String
+        get() = store.getString("backup_track_references", "[]") ?: "[]"
+        set(value) { store.put("backup_track_references", value) }
+
+    var bookmarksRaw: String
+        get() = store.getString("audio_bookmarks", "") ?: ""
+        set(value) { store.put("audio_bookmarks", value) }
+
+    var finishedTrackUris: Set<String>
+        get() = store.getStringSet("finished_track_uris", emptySet()).orEmpty()
+        set(value) { store.put("finished_track_uris", value) }
+
+    var resumeRewindSeconds: Int
+        get() = store.getInt("resume_rewind_seconds", 0).coerceIn(0, 30)
+        set(value) { store.put("resume_rewind_seconds", value.coerceIn(0, 30)) }
+
+    fun markFinished(uri: String, finished: Boolean) {
+        val positions = JSONObject(playbackPositions)
+        if (finished) positions.remove(uri)
+        store.putAll(mapOf(
+            "finished_track_uris" to if (finished) finishedTrackUris + uri else finishedTrackUris - uri,
+            "playback_positions" to positions.toString(),
+        ))
+    }
 
     /** Epoch-ms of the last automatic update check, throttling it to once a day. */
     var updateLastCheckAt: Long
@@ -429,6 +461,25 @@ class PlaybackPreferences(context: Context) {
             }.toString()
         }
         if (history != null) restored["play_history"] = history
+
+        // Optional keys keep old backups from erasing newer playback data/settings.
+        if (root.has("playbackPositions")) restored["playback_positions"] = root.getJSONObject("playbackPositions").toString()
+        if (root.has("lastQueueUris")) restored["last_queue_uris"] = root.getJSONArray("lastQueueUris").toString()
+        if (root.has("lastQueueIndex")) restored["last_queue_index"] = root.getInt("lastQueueIndex")
+        if (root.has("trackReferences")) restored["backup_track_references"] = root.getJSONArray("trackReferences").toString()
+        if (root.has("bookmarks")) restored["audio_bookmarks"] = root.getString("bookmarks")
+        root.optJSONArray("finishedTrackUris")?.let { uris ->
+            restored["finished_track_uris"] = (0 until uris.length()).map { uris.getString(it) }.toSet()
+        }
+        if (settings.has("resumeRewindSeconds")) restored["resume_rewind_seconds"] = settings.getInt("resumeRewindSeconds").coerceIn(0, 30)
+        mapOf(
+            "resumePlayback" to "resume_playback", "showLyricsTimestamps" to "show_lyrics_timestamps",
+            "sleepFinishTrack" to "sleep_finish_track", "sleepCloseApp" to "sleep_close_app",
+        ).forEach { (jsonKey, storeKey) -> if (settings.has(jsonKey)) restored[storeKey] = settings.getBoolean(jsonKey) }
+        if (settings.has("libraryScanMode")) restored["library_scan_mode"] = settings.getString("libraryScanMode")
+        settings.optJSONArray("scanFolders")?.let { folders ->
+            restored["scan_folders"] = (0 until folders.length()).map { folders.getString(it) }.toSet()
+        }
 
         // One synchronous write: a restore must be on disk before the screen reloads
         // from it, and a half-applied restore would be worse than a failed one.

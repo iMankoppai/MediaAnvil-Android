@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
@@ -115,6 +116,8 @@ internal fun NowPlayingPage(
     onOpenLibrary: () -> Unit,
 ) {
     val context = LocalContext.current
+    val listening: ListeningViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    var bookmarksOpen by rememberSaveable { mutableStateOf(false) }
     val track = library.selectedTrack
     // Seed from the player so opening this page paints the real position straight
     // away instead of sliding up from 0:00 on the first poll.
@@ -173,6 +176,7 @@ internal fun NowPlayingPage(
 
     fun syncFromPlayer(player: Player, includeProgress: Boolean = true) {
         isPlaying = player.isPlaying
+        speed = player.playbackParameters.speed
         if (includeProgress) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = player.duration.coerceAtLeast(0L)
@@ -188,7 +192,6 @@ internal fun NowPlayingPage(
     DisposableEffect(controller, library.tracks) {
         val player = controller
         if (player == null) return@DisposableEffect onDispose { }
-        player.playbackParameters = androidx.media3.common.PlaybackParameters(speed)
         val listener = object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) = syncFromPlayer(player)
         }
@@ -252,6 +255,7 @@ internal fun NowPlayingPage(
                     onShuffleChange = { settings.preferences.shuffleEnabled = it },
                     onRepeatChange = { settings.preferences.repeatMode = it },
                     onOpenQueue = { queueOpen = true },
+                    onOpenBookmarks = { bookmarksOpen = true },
                 )
             }
             if (maxWidth >= PlayerTwoPaneMinWidth) {
@@ -377,6 +381,9 @@ internal fun NowPlayingPage(
         }
     }
 
+    if (bookmarksOpen && track != null) {
+        BookmarksSheet(track.uri.toString(), listening, controller, onDismiss = { bookmarksOpen = false })
+    }
     if (queueOpen) {
         QueueSheet(library, controller, onDismiss = { queueOpen = false })
     }
@@ -740,11 +747,23 @@ private fun PlaybackModeRow(
     onShuffleChange: (Boolean) -> Unit,
     onRepeatChange: (Int) -> Unit,
     onOpenQueue: () -> Unit,
+    onOpenBookmarks: () -> Unit,
 ) {
     val context = LocalContext.current
     var speedMenu by remember { mutableStateOf(false) }
     var shuffleEnabled by remember(controller) { mutableStateOf(controller?.shuffleModeEnabled == true) }
     var repeatMode by remember(controller) { mutableIntStateOf(controller?.repeatMode ?: Player.REPEAT_MODE_OFF) }
+    DisposableEffect(controller) {
+        val player = controller ?: return@DisposableEffect onDispose { }
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                shuffleEnabled = player.shuffleModeEnabled
+                repeatMode = player.repeatMode
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
     fun send(action: String) {
         runCatching {
             controller?.sendCustomCommand(
@@ -773,10 +792,10 @@ private fun PlaybackModeRow(
             }
         }
         Box(
-            Modifier.weight(1f).offset(x = (-10).dp),
+            Modifier.weight(1f),
             contentAlignment = Alignment.Center,
         ) {
-            androidx.compose.material3.TextButton(onClick = {
+            androidx.compose.material3.TextButton(contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp), onClick = {
                 when {
                     loopA < 0L -> {
                         onLoopA(positionMs)
@@ -817,6 +836,8 @@ private fun PlaybackModeRow(
             }) {
                 Text(
                     "A/B",
+                    maxLines = 1,
+                    softWrap = false,
                     color = if (loopA >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 18.sp,
                 )
@@ -826,13 +847,15 @@ private fun PlaybackModeRow(
             Box {
                 Text(
                     speedLabel(speed),
-                    fontSize = 18.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { speedMenu = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
                 )
                 DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
                     listOf(0.75f, 1f, 1.25f, 1.5f, 2f, 3f).forEach { option ->
@@ -847,8 +870,13 @@ private fun PlaybackModeRow(
                 }
             }
         }
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            IconButton(onClick = onOpenBookmarks) {
+                Icon(Icons.Filled.BookmarkBorder, contentDescription = stringResource(R.string.bookmarks))
+            }
+        }
         Box(
-            Modifier.weight(1f).offset(x = 10.dp),
+            Modifier.weight(1f),
             contentAlignment = Alignment.Center,
         ) {
             IconButton(onClick = onOpenQueue) {

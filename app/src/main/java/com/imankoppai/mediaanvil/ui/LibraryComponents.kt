@@ -248,7 +248,10 @@ internal fun playFromLibrary(
     } else {
         null
     }
-    player.setMediaItems(mediaItems, index, startPos ?: androidx.media3.common.C.TIME_UNSET)
+    val resumedPosition = startPos?.let {
+        com.imankoppai.mediaanvil.data.ListeningProgress.resumePosition(it, settings.preferences.resumeRewindSeconds, queue[index].durationMs)
+    }
+    player.setMediaItems(mediaItems, index, resumedPosition ?: androidx.media3.common.C.TIME_UNSET)
     player.shuffleModeEnabled = shuffle
     player.prepare()
     player.play()

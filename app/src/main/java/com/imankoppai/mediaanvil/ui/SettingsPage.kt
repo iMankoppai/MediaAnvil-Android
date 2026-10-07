@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal fun SettingsPage(
     library: LibraryViewModel,
     playlists: PlaylistViewModel,
@@ -66,6 +67,9 @@ internal fun SettingsPage(
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var seekBackSeconds by remember { mutableIntStateOf(settings.preferences.seekBackSeconds) }
     var seekForwardSeconds by remember { mutableIntStateOf(settings.preferences.seekForwardSeconds) }
+    var rewindSeconds by remember { mutableIntStateOf(settings.preferences.resumeRewindSeconds) }
+    var scanMode by remember { mutableStateOf(settings.preferences.libraryScanMode) }
+    var scanFolders by remember { mutableStateOf(settings.preferences.scanFolders) }
     // SharedPreferences is not Compose-observable; mirror settings locally so the
     // chips and switches refresh immediately instead of after re-entering the page.
     var language by remember { mutableStateOf(settings.preferences.language) }
@@ -79,9 +83,15 @@ internal fun SettingsPage(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
+        val saved = controller?.sendCustomCommand(androidx.media3.session.SessionCommand(
+            com.imankoppai.mediaanvil.playback.PlaybackService.COMMAND_SAVE_PLAYBACK,
+            android.os.Bundle.EMPTY), android.os.Bundle.EMPTY)
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { PlayerDataBackup.export(context, uri, settings.preferences) }
+                runCatching {
+                    saved?.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                    PlayerDataBackup.export(context, uri, settings.preferences)
+                }
             }
             message = context.getString(
                 if (result.isSuccess) R.string.backup_exported else R.string.backup_export_failed,
@@ -227,6 +237,14 @@ internal fun SettingsPage(
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             SeekIntervalSetting(
+                title = stringResource(R.string.resume_rewind), selectedSeconds = rewindSeconds,
+                choices = listOf(0, 3, 5, 10), onSelected = {
+                    rewindSeconds = it
+                    settings.preferences.resumeRewindSeconds = it
+                },
+            )
+            Spacer(Modifier.height(10.dp))
+            SeekIntervalSetting(
                 title = stringResource(R.string.seek_back_setting),
                 selectedSeconds = seekBackSeconds,
                 choices = listOf(5, 10, 15, 30),
@@ -247,8 +265,6 @@ internal fun SettingsPage(
             )
         }
 
-        var scanMode by remember { mutableStateOf(settings.preferences.libraryScanMode) }
-        var scanFolders by remember { mutableStateOf(settings.preferences.scanFolders) }
         fun updateScanFolders(updated: Set<String>) {
             scanFolders = updated
             settings.preferences.scanFolders = updated
@@ -522,36 +538,50 @@ internal fun SettingsPage(
 
 
     pendingImport?.let { uri ->
-        AlertDialog(
-            onDismissRequest = { pendingImport = null },
-            title = { Text(stringResource(R.string.backup_import_confirm_title)) },
-            text = { Text(stringResource(R.string.backup_import_confirm_body)) },
-            confirmButton = {
-                Button(onClick = {
-                    pendingImport = null
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            runCatching { PlayerDataBackup.import(context, uri, settings.preferences) }
-                        }
-                        if (result.isSuccess) {
-                            seekBackSeconds = settings.preferences.seekBackSeconds
-                            seekForwardSeconds = settings.preferences.seekForwardSeconds
-                            ThemeController.mode = settings.preferences.themeMode
-                            playlists.reload()
-                            message = context.getString(R.string.backup_imported)
-                        } else {
-                            message = context.getString(R.string.backup_import_failed)
+        BackupRestoreDialog(
+            source = uri,
+            onDismiss = { pendingImport = null },
+            onRestore = { plan, choices ->
+                val prepared = controller?.sendCustomCommand(androidx.media3.session.SessionCommand(
+                    com.imankoppai.mediaanvil.playback.PlaybackService.COMMAND_SAVE_PLAYBACK,
+                    android.os.Bundle.EMPTY), android.os.Bundle().apply {
+                    putBoolean(com.imankoppai.mediaanvil.playback.PlaybackService.ARG_PREPARE_RESTORE, true)
+                })
+                pendingImport = null
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            prepared?.get(5, java.util.concurrent.TimeUnit.SECONDS)?.let {
+                                check(it.resultCode == androidx.media3.session.SessionResult.RESULT_SUCCESS)
+                            }
+                            PlayerDataBackup.restore(plan, choices, settings.preferences)
                         }
                     }
-                }) { Text(stringResource(R.string.confirm)) }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { pendingImport = null }) {
-                    Text(stringResource(R.string.cancel))
+                    // Release the service's write guard even when a restore fails.
+                    controller?.sendCustomCommand(androidx.media3.session.SessionCommand(
+                        com.imankoppai.mediaanvil.playback.PlaybackService.COMMAND_RELOAD_PLAYBACK,
+                        android.os.Bundle.EMPTY), android.os.Bundle.EMPTY)
+                    if (result.isSuccess) {
+                        seekBackSeconds = settings.preferences.seekBackSeconds
+                        seekForwardSeconds = settings.preferences.seekForwardSeconds
+                        rewindSeconds = settings.preferences.resumeRewindSeconds
+                        scanMode = settings.preferences.libraryScanMode
+                        scanFolders = settings.preferences.scanFolders
+                        language = settings.preferences.language
+                        doublePressAction = settings.preferences.doublePressAction
+                        ThemeController.mode = settings.preferences.themeMode
+                        settings.reload()
+                        playlists.reload()
+                        library.refreshHiddenTracks()
+                        library.rescan(quiet = true)
+                        if (android.os.Build.VERSION.SDK_INT >= 33) applyLanguage(language)
+                        message = context.getString(R.string.backup_imported)
+                    } else message = context.getString(R.string.backup_import_failed)
                 }
             },
         )
     }
+
 }
 
 @Composable

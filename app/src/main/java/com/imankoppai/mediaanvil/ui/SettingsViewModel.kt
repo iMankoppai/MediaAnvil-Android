@@ -18,6 +18,13 @@ import com.imankoppai.mediaanvil.data.PlaybackPreferences
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     val preferences = PlaybackPreferences(application.applicationContext)
 
+    fun reload() {
+        autoLoadLyrics = preferences.autoLoadLyrics
+        resumePlayback = preferences.resumePlayback
+        showLyricsTimestamps = preferences.showLyricsTimestamps
+        refreshSleepTimer()
+    }
+
     /** Mirrors [PlaybackPreferences.autoLoadLyrics] so open screens react immediately. */
     var autoLoadLyrics by mutableStateOf(preferences.autoLoadLyrics)
         private set

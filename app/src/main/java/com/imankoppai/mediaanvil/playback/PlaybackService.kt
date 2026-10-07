@@ -41,17 +41,17 @@ class PlaybackService : MediaSessionService() {
     private var pendingSinglePress: Runnable? = null
     private var sleepFadeActive = false
     private var sleepFadeRestoreVolume = 1.0f
+    private var suppressProgressWrites = false
+    private var restoreGeneration = 0
 
     /** Keeps the notification buttons and the seek increments on the current settings. */
     private val preferencesListener: (String) -> Unit = { key ->
-        when (key) {
-            "seek_back_seconds", "seek_forward_seconds" -> {
-                exoPlayer?.let { player ->
-                    player.setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
-                    player.setSeekForwardIncrementMs(preferences.seekForwardSeconds * 1_000L)
-                }
-                mediaSession?.setMediaButtonPreferences(notificationButtons())
+        if (key == "seek_back_seconds" || key == "seek_forward_seconds") handler.post {
+            exoPlayer?.let { player ->
+                player.setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
+                player.setSeekForwardIncrementMs(preferences.seekForwardSeconds * 1_000L)
             }
+            mediaSession?.setMediaButtonPreferences(notificationButtons())
         }
     }
 
@@ -97,16 +97,19 @@ class PlaybackService : MediaSessionService() {
 
     /** Persists the current queue, index and position for "continue where you left off". */
     private fun saveResumeState(player: Player, force: Boolean = false) {
+        if (suppressProgressWrites) return
         if (!preferences.resumePlayback) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (!force && now - lastResumeSaveAt < POSITION_SAVE_INTERVAL_MS) return
         lastResumeSaveAt = now
         val id = player.currentMediaItem?.mediaId ?: return
         val pos = player.currentPosition.coerceAtLeast(0L)
-        val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+        val duration = player.duration
+        val completed = com.imankoppai.mediaanvil.data.ListeningProgress.isFinished(pos, duration) ||
+            (!player.isPlaying && id in preferences.finishedTrackUris)
         // A track played to within a few seconds of its end counts as finished.
         val savedPosition = when {
-            pos >= duration - 15_000L -> -1L
+            completed -> -1L
             pos > 3_000L -> pos
             else -> -1L
         }
@@ -117,6 +120,7 @@ class PlaybackService : MediaSessionService() {
             queueUris = uris,
             queueIndex = player.currentMediaItemIndex,
             synchronous = force,
+            completed = completed,
         )
     }
 
@@ -206,6 +210,15 @@ class PlaybackService : MediaSessionService() {
         })
         player.addListener(wrapAroundListener)
         player.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (suppressProgressWrites) return
+                val oldUri = oldPosition.mediaItem?.mediaId ?: return
+                if (oldUri != newPosition.mediaItem?.mediaId || reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+                    if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) preferences.markFinished(oldUri, true)
+                    else if (preferences.resumePlayback) preferences.setPlaybackPosition(oldUri, oldPosition.positionMs.takeIf { it > 3_000 } ?: -1)
+                }
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (!isPlaying) {
                     mediaSession?.player?.let { saveResumeState(it, force = true) }
@@ -238,7 +251,12 @@ class PlaybackService : MediaSessionService() {
                         .add(SessionCommand(COMMAND_LOOP_CLEAR, Bundle.EMPTY))
                         .add(SessionCommand(COMMAND_STOP_AFTER_ON, Bundle.EMPTY))
                         .add(SessionCommand(COMMAND_STOP_AFTER_OFF, Bundle.EMPTY))
-                        .build()
+                        .apply {
+                            if (controllerInfo.uid == android.os.Process.myUid()) {
+                                add(SessionCommand(COMMAND_RELOAD_PLAYBACK, Bundle.EMPTY))
+                                add(SessionCommand(COMMAND_SAVE_PLAYBACK, Bundle.EMPTY))
+                            }
+                        }.build()
                     // The media notification keeps all five transport buttons; the
                     // player drops the skip commands while nothing seekable is loaded.
                     val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
@@ -277,6 +295,35 @@ class PlaybackService : MediaSessionService() {
                     args: Bundle,
                 ): ListenableFuture<SessionResult> {
                     when (command.customAction) {
+                        COMMAND_RELOAD_PLAYBACK -> {
+                            if (controllerInfo.uid != android.os.Process.myUid()) {
+                                return Futures.immediateFuture(SessionResult(androidx.media3.session.SessionError.ERROR_PERMISSION_DENIED))
+                            }
+                            suppressProgressWrites = true
+                            try {
+                                player.pause()
+                                player.clearMediaItems()
+                            } finally { suppressProgressWrites = false }
+                            player.playbackParameters = androidx.media3.common.PlaybackParameters(preferences.playbackSpeed)
+                            player.shuffleModeEnabled = preferences.shuffleEnabled
+                            player.repeatMode = preferences.repeatMode
+                            restoreLastQueue()
+                        }
+                        COMMAND_SAVE_PLAYBACK -> {
+                            if (controllerInfo.uid != android.os.Process.myUid()) {
+                                return Futures.immediateFuture(SessionResult(androidx.media3.session.SessionError.ERROR_PERMISSION_DENIED))
+                            }
+                            val preparingRestore = args.getBoolean(ARG_PREPARE_RESTORE)
+                            if (preparingRestore) player.pause()
+                            lastResumeSaveAt = 0
+                            saveResumeState(player)
+                            if (preparingRestore) {
+                                // The caller waits for this acknowledgement before importing.
+                                // No old queue/position callback may overwrite the restored data.
+                                suppressProgressWrites = true
+                                restoreGeneration++
+                            }
+                        }
                         COMMAND_LOOP_A -> {
                             loopStartMs = player.currentPosition
                             loopEndMs = -1
@@ -328,6 +375,7 @@ class PlaybackService : MediaSessionService() {
 
     /** Rebuilds the last queue (paused) after a reboot or process death. */
     private fun restoreLastQueue() {
+        val generation = ++restoreGeneration
         if (!preferences.resumePlayback) return
         val uris = runCatching {
             val array = org.json.JSONArray(preferences.lastQueueUris)
@@ -375,6 +423,7 @@ class PlaybackService : MediaSessionService() {
                 }
             }
             handler.post {
+                if (generation != restoreGeneration) return@post
                 val player = mediaSession?.player ?: return@post
                 if (player.currentMediaItem != null) return@post
                 val items = mutableListOf<MediaItem>()
@@ -398,7 +447,9 @@ class PlaybackService : MediaSessionService() {
                 }
                 if (items.isEmpty()) return@post
                 val start = restoredIndex.coerceIn(0, items.size - 1)
-                val savedPos = preferences.playbackPositionFor(uris[savedIndex.coerceAtLeast(0)])
+                val restoredId = items[start].mediaId
+                val savedPos = com.imankoppai.mediaanvil.data.ListeningProgress.resumePosition(
+                    preferences.playbackPositionFor(restoredId), preferences.resumeRewindSeconds, 0)
                 // Read the stored loop before setMediaItems: that call fires a media item
                 // transition, and the transition listener clears the stored markers.
                 val storedLoopUri = preferences.loopTrackUri
@@ -407,7 +458,7 @@ class PlaybackService : MediaSessionService() {
                 player.setMediaItems(items, start, savedPos.takeIf { it > 0L } ?: androidx.media3.common.C.TIME_UNSET)
                 player.prepare()
                 // A loop the user had marked on this track is still stored.
-                if (storedLoopUri == uris[savedIndex.coerceAtLeast(0)] && storedLoopEnd > storedLoopStart) {
+                if (storedLoopUri == restoredId && storedLoopEnd > storedLoopStart) {
                     loopStartMs = storedLoopStart
                     loopEndMs = storedLoopEnd
                 }
@@ -564,6 +615,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        const val COMMAND_SAVE_PLAYBACK = "com.imankoppai.mediaanvil.SAVE_PLAYBACK"
+        const val ARG_PREPARE_RESTORE = "prepare_restore"
+        const val COMMAND_RELOAD_PLAYBACK = "com.imankoppai.mediaanvil.RELOAD_PLAYBACK"
         const val COMMAND_LOOP_A = "com.imankoppai.mediaanvil.LOOP_A"
         const val COMMAND_LOOP_B = "com.imankoppai.mediaanvil.LOOP_B"
         const val COMMAND_LOOP_CLEAR = "com.imankoppai.mediaanvil.LOOP_CLEAR"

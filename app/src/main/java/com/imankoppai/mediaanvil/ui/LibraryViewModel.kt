@@ -143,6 +143,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                         artist = record.artist,
                         album = record.album,
                         durationMs = record.durationMs,
+                        sizeBytes = record.sizeBytes,
                         subtitleUri = record.subtitleUri,
                         subtitleExtension = record.subtitleExtension,
                         relativeFolder = record.relativeFolder,
@@ -214,12 +215,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Fills in sidecar lyrics for tracks whose folder the user has already granted. */
-    private fun attachKnownSidecars(source: List<AudioTrack>): List<AudioTrack> =
-        source.map { track ->
-            if (track.subtitleUri != null) return@map track
-            val found = findSidecarLyrics(track) ?: return@map track
-            track.copy(subtitleUri = found.first, subtitleExtension = found.second)
+    private fun attachKnownSidecars(source: List<AudioTrack>): List<AudioTrack> {
+        val found = SafStorage.findSubtitles(appContext, source.filter { it.subtitleUri == null })
+        return source.map { track ->
+            val sidecar = found[track.uri]
+            if (track.subtitleUri != null || sidecar == null) track
+            else track.copy(subtitleUri = sidecar.first, subtitleExtension = sidecar.second)
         }
+    }
 
     /** Reflect an in-place tag edit immediately; MediaStore metadata lags behind. */
     fun applyTagEdit(uri: Uri, title: String, artist: String?) {
@@ -245,6 +248,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                                 artist = record.artist,
                                 album = record.album,
                                 durationMs = record.durationMs,
+                                sizeBytes = record.sizeBytes,
                                 subtitleUri = record.subtitleUri,
                                 subtitleExtension = record.subtitleExtension,
                                 relativeFolder = record.relativeFolder,

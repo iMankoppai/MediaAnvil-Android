@@ -48,6 +48,7 @@ object DeviceAudioLibrary {
                 add(MediaStore.Audio.Media.ARTIST)
                 add(MediaStore.Audio.Media.ALBUM)
                 add(MediaStore.Audio.Media.DURATION)
+                add(MediaStore.Audio.Media.SIZE)
                 if (useRelativePath) {
                     add(MediaStore.Audio.Media.RELATIVE_PATH)
                 } else {
@@ -64,6 +65,7 @@ object DeviceAudioLibrary {
                     val artistColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                     val albumColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                     val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                    val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
                     val pathColumn = cursor.getColumnIndex(
                         if (useRelativePath) MediaStore.Audio.Media.RELATIVE_PATH
                         else MediaStore.Audio.Media.DATA,
@@ -100,6 +102,7 @@ object DeviceAudioLibrary {
                             subtitleUri = null,
                             subtitleExtension = null,
                             relativeFolder = relativeFolder,
+                            sizeBytes = cursor.getLong(sizeColumn).coerceAtLeast(0L),
                         )
                     }
                 }

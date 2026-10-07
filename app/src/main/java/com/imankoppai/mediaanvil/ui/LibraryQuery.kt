@@ -34,33 +34,37 @@ internal object LibraryQuery {
         return terms.all { haystack.contains(it.lowercase()) }
     }
 
-    /**
-     * Resolves [wanted] keys against [available] items, keeping the order the user
-     * saved and silently skipping entries whose audio is gone. This is what makes a
-     * playlist or favourite list play back in its own order rather than library order.
-     */
-    /** Filters then sorts a library snapshot; shared by every list so behavior stays consistent. */
-    fun filterAndSort(
-        tracks: List<AudioTrack>,
-        query: String,
-        sortMode: String,
-    ): List<AudioTrack> {
-        val matched = tracks.filter { track ->
-            matches(
-                title = track.title,
-                artist = track.artist,
-                album = track.album,
-                fileName = track.fileName,
-                query = query,
-            )
+    /** Prepares search text and sorted snapshots once, off the UI thread. */
+    class Index(val source: List<AudioTrack>, checkCancellation: () -> Unit = {}) {
+        private data class Prepared(val track: AudioTrack, val text: String)
+        private val entries = source.mapIndexed { index, track ->
+            if (index % 256 == 0) checkCancellation()
+            Prepared(track, listOf(track.title, track.artist.orEmpty(), track.album.orEmpty(), track.fileName).joinToString(" ").lowercase())
         }
-        return when (sortMode) {
-            "title" -> matched.sortedBy { it.title.lowercase() }
-            "duration" -> matched.sortedBy { it.durationMs }
-            else -> matched.sortedBy { it.fileName.lowercase() }
+        private val byFileName = entries.sortedWith { a, b -> NaturalOrder.compare(a.track.fileName, b.track.fileName) }
+        private val byTitle = entries.sortedWith { a, b -> NaturalOrder.compare(a.track.title, b.track.title) }
+        private val byDuration = entries.sortedBy { it.track.durationMs }
+
+        fun search(query: String, sortMode: String, checkCancellation: () -> Unit = {}): List<AudioTrack> {
+            val terms = query.trim().lowercase().split(whitespace).filter(String::isNotEmpty)
+            val sorted = when (sortMode) {
+                "title" -> byTitle
+                "duration" -> byDuration
+                else -> byFileName
+            }
+            return buildList {
+                sorted.forEachIndexed { index, entry ->
+                    if (index % 256 == 0) checkCancellation()
+                    if (terms.all(entry.text::contains)) add(entry.track)
+                }
+            }
         }
     }
 
+    fun filterAndSort(tracks: List<AudioTrack>, query: String, sortMode: String): List<AudioTrack> =
+        Index(tracks).search(query, sortMode)
+
+    /** Resolves saved keys in their original order, skipping missing audio. */
     fun <T> resolve(available: List<T>, key: (T) -> String, wanted: List<String>): List<T> {
         if (wanted.isEmpty() || available.isEmpty()) return emptyList()
         val byKey = available.associateBy(key)

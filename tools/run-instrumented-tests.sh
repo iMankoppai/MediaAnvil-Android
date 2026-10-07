@@ -21,12 +21,15 @@
 #
 # What works is repeating the launch *during* the startup window:
 #
-#   am start -f 0x20000000 -n <pkg>/androidx.activity.ComponentActivity
+#   am start -f 0x20000000 -a android.intent.action.MAIN \
+#     -c android.intent.category.LAUNCHER -n <pkg>/androidx.activity.ComponentActivity
 #
 # FLAG_ACTIVITY_SINGLE_TOP matters. Without it every poke stacks another
 # ComponentActivity and the test that uses StateRestorationTester fails with
 # "No compose hierarchies found in the app". With it, one instance is reused - the
 # same one the test framework ends up driving. Verified 4 runs in a row.
+# MAIN/LAUNCHER must also match ActivityScenario's intent. A component-only launch
+# can show an empty host while startActivitySync still waits for its matching intent.
 #
 # Usage:
 #   tools/run-instrumented-tests.sh                 # whole suite
@@ -38,11 +41,11 @@ RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
 HOST_ACTIVITY="androidx.activity.ComponentActivity"
 SERIAL="${SERIAL:-}"
 OUT="${OUT:-/sdcard/_instrumented.txt}"
-# How long to keep poking. The suite needs cover for roughly its first ten seconds;
-# after that the tests are running well inside the freeze timeout.
-POKES="${POKES:-12}"
 # How long to wait for INSTRUMENTATION_CODE before giving up.
 WAIT_SECONDS="${WAIT_SECONDS:-300}"
+# Keep data-only tests awake after Compose closes its host too. Stop immediately
+# on completion rather than assuming the entire suite fits a fixed startup window.
+POKES="${POKES:-$WAIT_SECONDS}"
 
 if [ -n "$SERIAL" ]; then
     adb() { command adb -s "$SERIAL" "$@"; }
@@ -73,7 +76,10 @@ adb shell "nohup sh -c 'am instrument -w -r $CLASS_FILTER $RUNNER > $OUT 2>&1' >
 i=0
 while [ "$i" -lt "$POKES" ]; do
     sleep 1
-    adb shell "am start -f 0x20000000 -n $PKG/$HOST_ACTIVITY" >/dev/null 2>&1 || true
+    if adb shell "grep -q INSTRUMENTATION_CODE $OUT" >/dev/null 2>&1; then
+        break
+    fi
+    adb shell "am start -f 0x20000000 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n $PKG/$HOST_ACTIVITY" >/dev/null 2>&1 || true
     i=$((i + 1))
 done
 
@@ -88,3 +94,17 @@ while [ "$waited" -lt "$WAIT_SECONDS" ]; do
 done
 
 adb shell "cat $OUT" | grep -E 'OK \(|Tests run|FAILURES|INSTRUMENTATION_CODE|main-thread|No compose' || true
+
+# A crashed/frozen runner can also emit INSTRUMENTATION_CODE. Require real success
+# so this helper cannot make a failed or timed-out verification look green.
+if ! adb shell "grep -q '^OK (' $OUT" >/dev/null 2>&1; then
+    echo "Instrumented tests did not complete successfully." >&2
+    exit 1
+fi
+
+# AndroidJUnitRunner reports ignored tests as -3 and failed assumptions as -4.
+# JUnit can still print OK in both cases; a verification run must execute every test.
+if adb shell "grep -Eq '^INSTRUMENTATION_STATUS_CODE: -(3|4)' $OUT" >/dev/null 2>&1; then
+    echo "Instrumented tests contained skipped tests." >&2
+    exit 1
+fi

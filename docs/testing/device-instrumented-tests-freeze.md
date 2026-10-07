@@ -39,7 +39,8 @@ Activity 也从未出现**，主屏始终在最前，且该进程 CPU 时间完�
 ## 有效解法：在启动窗口内反复拉起宿主 Activity
 
 ```sh
-am start -f 0x20000000 -n <pkg>/androidx.activity.ComponentActivity
+am start -f 0x20000000 -a android.intent.action.MAIN \
+  -c android.intent.category.LAUNCHER -n <pkg>/androidx.activity.ComponentActivity
 ```
 
 要点有两处，缺一不可：
@@ -51,13 +52,19 @@ am start -f 0x20000000 -n <pkg>/androidx.activity.ComponentActivity
    `StateRestorationTester` 的那条测试报
    `No such compose hierarchies found in the app`。带上该标志则复用同一实例。
 
+V1.06 回归补充了两点：启动动作与分类必须和 `ActivityScenario` 一致（`MAIN` / `LAUNCHER`）。
+只有 component 的启动可能显示空白宿主，但 `Instrumentation.startActivitySync` 仍在等待匹配
+的 Intent；JDWP 线程栈可以确认这个等待。另外，Compose 测试结束并关闭宿主后，后续数据测试
+仍会被后台冻结，因此默认持续保活到测试完成，不能只覆盖最初 12 秒。脚本检测完成标记后
+立即停止，并且要求输出真正的 `OK (… tests)`，崩溃或超时都会返回非零状态。
+
 另外，**必须先唤醒并解锁**：屏幕休眠时 Activity 拿不到窗口（日志里是
 `Focus leaving ... reason=NO_WINDOW`），进程照样被判定为后台而被冻。
 
 `tools/run-instrumented-tests.sh` 已把这三步固化：
 
 ```sh
-tools/run-instrumented-tests.sh                                   # 全部 45 项
+tools/run-instrumented-tests.sh                                   # V1.06 全部 55 项
 tools/run-instrumented-tests.sh com.imankoppai.mediaanvil.Phase5MainThreadIoTest
 ```
 

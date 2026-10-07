@@ -4,7 +4,6 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeFalse
 import org.junit.Test
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.audio.mp3.MP3File
@@ -71,13 +70,9 @@ class TagIOTest {
     @Test
     fun flacUnicodeRoundTripPreservesOtherTags() = verifyUnicodeRoundTrip("flac")
 
-    @Test
-    fun m4aUnicodeRoundTripPreservesOtherTags() {
-        // jAudioTagger keeps the MP4 input handle open on Windows, where an open file cannot
-        // be renamed during commit. Android allows that replacement and is covered on-device.
-        assumeFalse(System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true))
-        verifyUnicodeRoundTrip("m4a")
-    }
+    // M4A file replacement is tested on Android by TagIODeviceTest on every CI run.
+    // jAudioTagger's open MP4 handle prevents replacement on Windows, so this check
+    // belongs in androidTest rather than a host test with a platform skip.
 
     @Test
     fun oggUnicodeRoundTripPreservesOtherTags() = verifyUnicodeRoundTrip("ogg")

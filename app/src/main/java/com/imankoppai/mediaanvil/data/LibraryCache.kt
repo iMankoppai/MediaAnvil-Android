@@ -24,6 +24,7 @@ object LibraryCache {
         val relativeFolder: String,
         val subtitleUri: Uri?,
         val subtitleExtension: String?,
+        val sizeBytes: Long = 0L,
     )
 
     data class Snapshot(
@@ -45,6 +46,7 @@ object LibraryCache {
                         .put("artist", track.artist.orEmpty())
                         .put("album", track.album.orEmpty())
                         .put("durationMs", track.durationMs)
+                        .put("sizeBytes", track.sizeBytes)
                         .put("relativeFolder", track.relativeFolder)
                         .put("subtitleUri", track.subtitleUri?.toString().orEmpty())
                         .put("subtitleExtension", track.subtitleExtension.orEmpty()),
@@ -78,6 +80,7 @@ object LibraryCache {
                 artist = item.optString("artist").ifEmpty { null },
                 album = item.optString("album").ifEmpty { null },
                 durationMs = item.optLong("durationMs"),
+                sizeBytes = item.optLong("sizeBytes"),
                 // Snapshots written by V1.02 stored an absolute parentPath; the
                 // scanner re-derives a relative folder on the next refresh, so an
                 // unreadable legacy value simply falls back to the root folder.

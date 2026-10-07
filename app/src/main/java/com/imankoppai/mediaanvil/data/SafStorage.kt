@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.DocumentsContract.Document as DocumentColumns
 import androidx.core.content.edit
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
@@ -112,28 +113,47 @@ object SafStorage {
     }
 
     /** An existing sidecar document for [track], looked up by the naming rules. */
-    fun findSubtitle(context: Context, track: com.imankoppai.mediaanvil.model.AudioTrack): Pair<Uri, String>? {
-        val access = findGrant(context, track.relativeFolder)
-        if (access !is FolderAccess.Granted) return null
-        val folder = folderDocument(context, access.treeUri, track.relativeFolder) ?: return null
-        val base = track.fileName.substringBeforeLast('.', track.fileName)
-        DeviceAudioLibrary.subtitleExtensions.forEach { extension ->
-            // "song.mp3.lrc" wins over "song.lrc", matching the previous scanner.
-            //
-            // The ".txt" forms cover files a provider stored under an extension it
-            // derived from the MIME type — see [renamedTo]. They are accepted on read
-            // and on delete so that lyrics saved before that was corrected, or saved
-            // somewhere the rename is refused, still work instead of going missing.
-            listOf(
-                "${track.fileName}.$extension",
-                "$base.$extension",
-                "${track.fileName}.$extension.txt",
-                "$base.$extension.txt",
-            ).forEach { candidate ->
-                folder.findFile(candidate)?.let { return it.uri to extension }
-            }
+    fun findSubtitle(context: Context, track: com.imankoppai.mediaanvil.model.AudioTrack): Pair<Uri, String>? =
+        findSubtitles(context, listOf(track))[track.uri]
+
+    /** Read each directory once per scan, including shared parent directories. No name queries per file. */
+    fun findSubtitles(context: Context, tracks: List<com.imankoppai.mediaanvil.model.AudioTrack>): Map<Uri, Pair<Uri, String>> {
+        val grants = grantedTrees(context).mapNotNull { tree -> treeRelativeFolder(context, tree)?.let { it to tree } }
+        if (grants.isEmpty()) return emptyMap()
+        data class Document(val id: String, val uri: Uri, val directory: Boolean)
+        val directories = mutableMapOf<Pair<Uri, String>, Map<String, Document>>()
+        fun children(tree: Uri, id: String): Map<String, Document> = directories.getOrPut(tree to id) {
+            runCatching {
+                val childUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
+                val projection = arrayOf(DocumentColumns.COLUMN_DOCUMENT_ID, DocumentColumns.COLUMN_DISPLAY_NAME, DocumentColumns.COLUMN_MIME_TYPE)
+                buildMap {
+                    context.contentResolver.query(childUri, projection, null, null, null)?.use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val documentId = cursor.getString(0)
+                            val name = cursor.getString(1) ?: continue
+                            put(name, Document(documentId, android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, documentId),
+                                cursor.getString(2) == DocumentColumns.MIME_TYPE_DIR))
+                        }
+                    }
+                }
+            }.getOrDefault(emptyMap())
         }
-        return null
+        return SidecarIndex.matchAll(tracks.map { SidecarIndex.Audio(it.uri, it.relativeFolder, it.fileName) }) { folder ->
+            val grant = grants.filter { (path, _) -> path.isEmpty() || folder == path || folder.startsWith("$path/") }
+                .maxByOrNull { it.first.length }
+            if (grant == null) emptyMap() else runCatching {
+                var id = android.provider.DocumentsContract.getTreeDocumentId(grant.second)
+                val remainder = folder.removePrefix(grant.first).trim('/')
+                if (remainder.isNotEmpty()) {
+                    for (segment in remainder.split('/')) {
+                        val directory = children(grant.second, id)[segment]?.takeIf { it.directory }
+                            ?: return@runCatching emptyMap<String, Uri>()
+                        id = directory.id
+                    }
+                }
+                children(grant.second, id).filterValues { !it.directory }.mapValues { it.value.uri }
+            }.getOrDefault(emptyMap())
+        }
     }
 
     /**

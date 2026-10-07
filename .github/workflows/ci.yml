@@ -28,7 +28,9 @@ jobs:
           "$SDKM" "platforms;android-36" "build-tools;36.0.0" >/dev/null
 
       - name: Unit tests, lint, and debug build
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+        run: |
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+          python3 tools/check-test-results.py app/build/test-results/testDebugUnitTest
 
       - name: Upload verification reports
         if: always()
@@ -70,14 +72,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run UI tests on an Android emulator
+      - name: Run Android tests including M4A on an emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
+          script: |
+            ./gradlew --no-daemon :app:connectedDebugAndroidTest
+            python3 tools/check-test-results.py app/build/outputs/androidTest-results/connected --require-test 'com.imankoppai.mediaanvil.TagIODeviceTest#m4aUnicodeRoundTripPreservesOtherTagsAndAudio'
 
       - name: Upload UI test reports
         if: always()
