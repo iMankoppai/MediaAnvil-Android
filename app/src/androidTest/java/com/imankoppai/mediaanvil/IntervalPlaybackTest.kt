@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -12,10 +13,12 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
 import com.imankoppai.mediaanvil.data.SettingsStore
 import com.imankoppai.mediaanvil.playback.PlaybackService
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
 import java.io.File
 import java.nio.ByteBuffer
@@ -24,6 +27,10 @@ import java.util.concurrent.TimeUnit
 
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class IntervalPlaybackTest {
+    // Android 15+ grants audio focus only to a foreground app or an active FGS.
+    // Match the user's action of starting an interval from the visible player.
+    @get:Rule val foreground = ActivityScenarioRule(ComponentActivity::class.java)
+
     @Test fun savedIntervalStartsFromPausedLoopsAndRejectsInvalidBoundaries() {
         val context=ApplicationProvider.getApplicationContext<Context>()
         val instrumentation=InstrumentationRegistry.getInstrumentation()
