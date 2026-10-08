@@ -7,12 +7,12 @@ import org.json.JSONObject
 import com.imankoppai.mediaanvil.model.AudioTrack
 
 object PlayerDataBackup {
-    /** 1 = V1.02, 2 = favourites/history, 3 = portable identities and complete listening data. */
-    private const val SCHEMA_VERSION = 3
+    /** 4 adds interval tags; old apps must not silently discard their end times. */
+    private const val SCHEMA_VERSION = 4
     private const val MAX_BACKUP_BYTES = 16 * 1024 * 1024
 
     /** Versions this build can still read, so a V1.02 backup restores intact. */
-    private val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2, 3)
+    private val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2, 3, 4)
 
     data class RestorePlan(
         val root: JSONObject,

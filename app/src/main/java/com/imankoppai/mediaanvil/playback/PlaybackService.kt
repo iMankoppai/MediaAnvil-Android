@@ -180,9 +180,7 @@ class PlaybackService : MediaSessionService() {
         // cannot turn into a status-bar icon; it then rejects the foreground-service
         // notification and kills the app. Use our own monochrome icon instead.
         setMediaNotificationProvider(
-            androidx.media3.session.DefaultMediaNotificationProvider.Builder(this)
-                .build()
-                .apply { setSmallIcon(R.drawable.ic_notification_small) },
+            TransportNotificationProvider(this).apply { setSmallIcon(R.drawable.ic_notification_small) },
         )
         preferences = PlaybackPreferences(this)
         val audioAttributes = AudioAttributes.Builder()
@@ -191,6 +189,7 @@ class PlaybackService : MediaSessionService() {
             .build()
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
             // Rewind / fast-forward (including the notification's buttons) follow the
             // intervals configured on the settings page.
             .setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
@@ -224,6 +223,9 @@ class PlaybackService : MediaSessionService() {
                     mediaSession?.player?.let { saveResumeState(it, force = true) }
                 } else {
                     recordPlayed(player.currentMediaItem)
+                    // A range activated while paused must not wait for the idle ticker.
+                    handler.removeCallbacks(loopTicker)
+                    handler.post(loopTicker)
                 }
                 updateWidget()
             }
@@ -255,6 +257,7 @@ class PlaybackService : MediaSessionService() {
                             if (controllerInfo.uid == android.os.Process.myUid()) {
                                 add(SessionCommand(COMMAND_RELOAD_PLAYBACK, Bundle.EMPTY))
                                 add(SessionCommand(COMMAND_SAVE_PLAYBACK, Bundle.EMPTY))
+                                add(SessionCommand(COMMAND_LOOP_RANGE, Bundle.EMPTY))
                             }
                         }.build()
                     // The media notification keeps all five transport buttons; the
@@ -323,6 +326,17 @@ class PlaybackService : MediaSessionService() {
                                 suppressProgressWrites = true
                                 restoreGeneration++
                             }
+                        }
+                        COMMAND_LOOP_RANGE -> {
+                            val start = args.getLong("start", -1)
+                            val end = args.getLong("end", -1)
+                            if (controllerInfo.uid != android.os.Process.myUid() || args.getString("uri") != player.currentMediaItem?.mediaId ||
+                                !com.imankoppai.mediaanvil.data.IntervalTimes.valid(start, end, player.duration)) {
+                                return Futures.immediateFuture(SessionResult(androidx.media3.session.SessionError.ERROR_BAD_VALUE))
+                            }
+                            loopStartMs = start; loopEndMs = end
+                            player.seekTo(start)
+                            player.play()
                         }
                         COMMAND_LOOP_A -> {
                             loopStartMs = player.currentPosition
@@ -468,11 +482,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     /**
-     * The media notification mirrors the player page's transport row. The buttons are
-     * declared up front because the player only reports the seek commands once a
-     * seekable item is loaded, which is too late for the notification. The skip
-     * buttons claim the overflow slots, otherwise they would lose the single
-     * back / forward slot to the skip-to-previous / next buttons.
+     * Advertise seek buttons in overflow so the session keeps its standard previous /
+     * next commands. TransportNotificationProvider separately orders notification
+     * actions as previous, seek back, play/pause, seek forward, next. System UIs that
+     * derive controls from PlaybackState may still apply their own slot layout.
      */
     private fun notificationButtons(): List<CommandButton> = listOf(
         CommandButton.Builder(CommandButton.ICON_PREVIOUS)
@@ -615,6 +628,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        const val COMMAND_LOOP_RANGE = "com.imankoppai.mediaanvil.LOOP_RANGE"
         const val COMMAND_SAVE_PLAYBACK = "com.imankoppai.mediaanvil.SAVE_PLAYBACK"
         const val ARG_PREPARE_RESTORE = "prepare_restore"
         const val COMMAND_RELOAD_PLAYBACK = "com.imankoppai.mediaanvil.RELOAD_PLAYBACK"

@@ -30,12 +30,25 @@ object LibraryCache {
     data class Snapshot(
         val tracks: List<TrackRecord>,
         val savedAt: Long,
-    )
+        val checkpoints: Map<String, MediaCheckpoint> = emptyMap(),
+        val folderScope: Set<String> = emptySet(),
+    ) {
+        fun asScan(): LibraryScan = LibraryScan(tracks.map { record ->
+            com.imankoppai.mediaanvil.model.AudioTrack(record.uri, record.fileName, record.title, record.artist, record.album,
+                record.durationMs, record.subtitleUri, record.subtitleExtension, record.relativeFolder, record.sizeBytes)
+        }, checkpoints = checkpoints, folderScope = folderScope)
+    }
 
     fun save(context: Context, scan: LibraryScan) {
         runCatching {
             val root = JSONObject()
                 .put("savedAt", System.currentTimeMillis())
+                .put("folderScope", JSONArray(scan.folderScope.sorted()))
+                .put("checkpoints", JSONObject().apply {
+                    scan.checkpoints.forEach { (volume, checkpoint) ->
+                        put(volume, JSONObject().put("version", checkpoint.version).put("generation", checkpoint.generation))
+                    }
+                })
             val tracks = JSONArray()
             scan.tracks.forEach { track ->
                 tracks.put(
@@ -91,7 +104,14 @@ object LibraryCache {
                 subtitleExtension = item.optString("subtitleExtension").ifEmpty { null },
             )
         }
-        Snapshot(tracks = tracks, savedAt = root.optLong("savedAt"))
+        val metadata = root.optJSONObject("checkpoints") ?: JSONObject()
+        val checkpoints = metadata.keys().asSequence().associateWith { volume ->
+            val checkpoint = metadata.getJSONObject(volume)
+            MediaCheckpoint(checkpoint.getString("version"), checkpoint.getLong("generation"))
+                .also { require(it.version.isNotBlank() && it.generation >= 0) }
+        }
+        val scope = root.optJSONArray("folderScope") ?: JSONArray()
+        Snapshot(tracks, root.optLong("savedAt"), checkpoints, (0 until scope.length()).map { scope.getString(it) }.toSet())
     }.getOrNull()
 
     /** Best-effort conversion of a V1.02 absolute parentPath into a relative folder. */

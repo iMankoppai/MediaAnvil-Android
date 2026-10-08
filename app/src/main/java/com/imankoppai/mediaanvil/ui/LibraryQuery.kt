@@ -39,7 +39,7 @@ internal object LibraryQuery {
         private data class Prepared(val track: AudioTrack, val text: String)
         private val entries = source.mapIndexed { index, track ->
             if (index % 256 == 0) checkCancellation()
-            Prepared(track, listOf(track.title, track.artist.orEmpty(), track.album.orEmpty(), track.fileName).joinToString(" ").lowercase())
+            Prepared(track, listOf(track.title, track.artist.orEmpty(), track.album.orEmpty(), track.fileName, track.relativeFolder).joinToString(" ").lowercase())
         }
         private val byFileName = entries.sortedWith { a, b -> NaturalOrder.compare(a.track.fileName, b.track.fileName) }
         private val byTitle = entries.sortedWith { a, b -> NaturalOrder.compare(a.track.title, b.track.title) }

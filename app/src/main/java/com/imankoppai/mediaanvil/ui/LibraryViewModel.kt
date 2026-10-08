@@ -2,6 +2,7 @@ package com.imankoppai.mediaanvil.ui
 
 import android.app.Application
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.getValue
@@ -54,6 +55,22 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private var hiddenTrackUris: Set<String> = preferences.hiddenTrackUris
 
     private var scanJob: Job? = null
+    private var pendingRescan = false
+    private var pendingFullScan = false
+    private var observerJob: Job? = null
+    private val mediaObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            val path = uri?.path.orEmpty()
+            if (path.isNotEmpty() && !path.contains("/audio") && !path.contains("/file")) return
+            observerJob?.cancel()
+            observerJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(800)
+                if (hasStorageAccess()) rescan(quiet = true)
+            }
+        }
+    }
+
+    init { appContext.contentResolver.registerContentObserver("content://media".toUri(), true, mediaObserver) }
 
     /** Serializes cache writes so a lyric edit cannot interleave with a scan snapshot. */
     private val cacheWriteMutex = Mutex()
@@ -107,7 +124,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         val scan = LibraryScan(tracks)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                cacheWriteMutex.withLock { LibraryCache.save(appContext, scan) }
+                cacheWriteMutex.withLock {
+                    val cached = LibraryCache.load(appContext)?.asScan()
+                    val updates = scan.tracks.associateBy { it.uri }
+                    val combined = cached?.tracks?.map { updates[it.uri] ?: it } ?: scan.tracks
+                    LibraryCache.save(appContext, (cached ?: scan).copy(tracks = combined))
+                }
             }
         }
     }
@@ -148,24 +170,27 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                         subtitleExtension = record.subtitleExtension,
                         relativeFolder = record.relativeFolder,
                     )
-                }.filterNot { it.uri.toString() in hiddenTrackUris }
+                }.filter { DeviceAudioLibrary.isFolderAllowed(it.relativeFolder, allowedScanFolders()) }
+                    .filterNot { it.uri.toString() in hiddenTrackUris }
                 files = LibraryScan(tracks)
                 loading = false
-                if (!LibraryCache.isFresh(snapshot)) {
-                    scanAll(quiet = true)
-                }
+                scanAll(quiet = true)
             } else {
                 scanAll(quiet = false)
             }
         }
     }
 
-    fun rescan(quiet: Boolean = false, onLoaded: (Int) -> Unit = {}) {
-        scanAll(quiet, onLoaded)
+    fun rescan(quiet: Boolean = false, full: Boolean = false, onLoaded: (Int) -> Unit = {}) {
+        scanAll(quiet, onLoaded, full)
     }
 
-    private fun scanAll(quiet: Boolean, onLoaded: (Int) -> Unit = {}) {
-        if (scanJob?.isActive == true) return
+    private fun scanAll(quiet: Boolean, onLoaded: (Int) -> Unit = {}, full: Boolean = false) {
+        if (scanJob?.isActive == true) {
+            pendingRescan = true
+            pendingFullScan = pendingFullScan || full
+            return
+        }
         loading = !quiet
         if (!quiet) message = null
         val allowedFolders = allowedScanFolders()
@@ -176,15 +201,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             // particular issues a document query per track, and it used to run after
             // the block returned — i.e. back on the main thread — so a large library
             // stalled the frame that was supposed to show the scan results.
-            val result = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) { cacheWriteMutex.withLock {
                 val scanned = try {
-                    DeviceAudioLibrary.scan(appContext, allowedFolders)
+                    DeviceAudioLibrary.scan(appContext, allowedFolders, LibraryCache.load(appContext), full)
                 } catch (scanFailure: Exception) {
                     null
                 }
                 if (scanned == null) {
                     scanFailed = true
-                    return@withContext null
+                    return@withLock null
                 }
                 // Sidecar lyrics are located inside user-granted folders; without a
                 // grant the track simply shows no lyrics instead of failing the scan.
@@ -193,9 +218,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 // the UI state. This makes restoring them reliable even if the app
                 // closes during the restore scan. The mutex keeps this from racing a
                 // lyric/tag edit that persisted its own snapshot.
-                cacheWriteMutex.withLock { LibraryCache.save(appContext, withSidecars) }
+                LibraryCache.save(appContext, withSidecars)
+                android.util.Log.d("MediaAnvilScan", "incremental=${scanned.incremental} metadataRows=${scanned.metadataRowsRead} tracks=${scanned.tracks.size}")
                 withSidecars
-            } ?: run {
+            } } ?: run {
                 loading = false
                 if (!quiet) message = appContext.getString(com.imankoppai.mediaanvil.R.string.scan_failed)
                 onLoaded(tracks.size)
@@ -211,7 +237,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 message = appContext.getString(com.imankoppai.mediaanvil.R.string.no_tracks)
             }
             onLoaded(visibleTracks.size)
-        }
+        }.also { job -> job.invokeOnCompletion {
+            if (pendingRescan) viewModelScope.launch {
+                val force = pendingFullScan
+                pendingRescan = false; pendingFullScan = false
+                scanAll(quiet = true, full = force)
+            }
+        } }
+    }
+
+    override fun onCleared() {
+        appContext.contentResolver.unregisterContentObserver(mediaObserver)
+        super.onCleared()
     }
 
     /** Fills in sidecar lyrics for tracks whose folder the user has already granted. */

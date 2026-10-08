@@ -91,16 +91,14 @@ private val libraryTabs = listOf(
     R.string.tab_music,
     R.string.continue_listening,
     R.string.tab_favorites,
-    R.string.tab_recent,
     R.string.tab_groups,
 )
 
 /** Index of the Groups tab; the others are flat track lists. */
-private const val GROUPS_TAB = 4
+private const val GROUPS_TAB = 3
 private const val FAVORITES_TAB = 2
-private const val RECENT_TAB = 3
 
-private enum class MusicView { Songs, Albums, Artists }
+private enum class MusicView { Songs, Albums, Artists, Folders }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,6 +126,7 @@ internal fun LibraryPage(
         }
     }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val tabIndex = selectedTab.coerceIn(0, libraryTabs.lastIndex)
     var selectionMode by remember { mutableStateOf(false) }
     var selectedUris by remember { mutableStateOf(setOf<String>()) }
     var groupDialogOpen by remember { mutableStateOf(false) }
@@ -137,7 +136,7 @@ internal fun LibraryPage(
     var isPlaying by remember { mutableStateOf(false) }
     var openTrackGroupId by remember { mutableStateOf<String?>(null) }
     var queueOpen by remember { mutableStateOf(false) }
-    var musicView by remember { mutableStateOf(MusicView.Songs) }
+    var musicView by rememberSaveable { mutableStateOf(MusicView.Songs) }
     var openGroup by remember { mutableStateOf<String?>(null) }
 
     fun syncPlaybackState(player: Player) {
@@ -163,7 +162,7 @@ internal fun LibraryPage(
 
     var sortMode by remember { mutableStateOf(settings.preferences.librarySort) }
 
-    BackHandler(enabled = selectedTab == GROUPS_TAB && openTrackGroupId != null) {
+    BackHandler(enabled = tabIndex == GROUPS_TAB && openTrackGroupId != null) {
         openTrackGroupId = null
     }
 
@@ -193,6 +192,7 @@ internal fun LibraryPage(
             menuOpen = menuOpen,
             onMenuOpenChange = { menuOpen = it },
             onRescan = { library.rescan() },
+            onFullRescan = { library.rescan(full = true) },
             hiddenTrackCount = playlists.hiddenTrackUris.size,
             onRestoreHiddenTracks = {
                 playlists.restoreHiddenTracks()
@@ -212,21 +212,21 @@ internal fun LibraryPage(
 
         PrimaryScrollableTabRow(
             edgePadding = 0.dp,
-            selectedTabIndex = selectedTab,
+            selectedTabIndex = tabIndex,
             containerColor = MaterialTheme.colorScheme.background,
             contentColor = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(horizontal = 8.dp),
         ) {
             libraryTabs.forEachIndexed { index, titleRes ->
                 Tab(
-                    selected = selectedTab == index,
+                    selected = tabIndex == index,
                     onClick = { selectedTab = index },
                     text = { Text(stringResource(titleRes), fontWeight = FontWeight.SemiBold) },
                 )
             }
         }
 
-        when (selectedTab) {
+        when (tabIndex) {
             1 -> ContinueListeningPage(library, playlists, settings, controller, onEditTrack)
             GROUPS_TAB -> TrackGroupView(
                 library = library,
@@ -242,20 +242,6 @@ internal fun LibraryPage(
                 SimpleTrackList(
                     tracks = favorites,
                     emptyText = stringResource(R.string.favorites_empty),
-                    library = library,
-                    playlists = playlists,
-                    settings = settings,
-                    controller = controller,
-                    onEditTrack = onEditTrack,
-                )
-            }
-            RECENT_TAB -> {
-                // The playback service writes the history, so re-read it on entry.
-                LaunchedEffect(Unit) { playlists.refreshPlayHistory() }
-                val recent = playlists.recentTracks(library.tracks)
-                SimpleTrackList(
-                    tracks = recent,
-                    emptyText = stringResource(R.string.recent_empty),
                     library = library,
                     playlists = playlists,
                     settings = settings,
@@ -307,7 +293,7 @@ internal fun LibraryPage(
                         )
                     }
                     else -> {
-                        Row(
+                        androidx.compose.foundation.layout.FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         ) {
@@ -335,6 +321,9 @@ internal fun LibraryPage(
                                 },
                                 label = { Text(stringResource(R.string.view_artists)) },
                             )
+                            FilterChip(selected = musicView == MusicView.Folders, onClick = {
+                                musicView = MusicView.Folders; openGroup = null
+                            }, label = { Text(stringResource(R.string.view_folders)) })
                         }
                         if (selectionMode) {
                             // Select-all covers what the list currently shows, so a
@@ -422,6 +411,7 @@ internal fun LibraryPage(
                             )
                         }
                         when (musicView) {
+                            MusicView.Folders -> FolderBrowser(filtered, library, playlists, settings, controller, onEditTrack)
                             MusicView.Songs -> if (search.loading) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                             } else if (filtered.isEmpty()) {
@@ -527,6 +517,7 @@ private fun TopBar(
     menuOpen: Boolean,
     onMenuOpenChange: (Boolean) -> Unit,
     onRescan: () -> Unit,
+    onFullRescan: () -> Unit,
     hiddenTrackCount: Int,
     onRestoreHiddenTracks: () -> Unit,
     onSortCycle: () -> Unit,
@@ -572,7 +563,12 @@ private fun TopBar(
                                 onRescan()
                             },
                         )
+                        DropdownMenuItem(text = { Text(stringResource(R.string.full_rescan)) }, onClick = {
+                            onMenuOpenChange(false)
+                            onFullRescan()
+                        })
                         if (hiddenTrackCount > 0) {
+                            // Hidden records are metadata only; refresh never deletes files.
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.restore_hidden_tracks, hiddenTrackCount)) },
                                 onClick = {

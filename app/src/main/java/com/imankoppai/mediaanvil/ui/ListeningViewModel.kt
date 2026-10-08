@@ -51,17 +51,19 @@ class ListeningViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun addBookmark(uri: String, positionMs: Long, note: String) {
+    fun addIntervalTag(uri: String, positionMs: Long, endPositionMs: Long, note: String) {
+        require(com.imankoppai.mediaanvil.data.IntervalTimes.valid(positionMs, endPositionMs, 0) && note.isNotBlank())
         viewModelScope.launch(editDispatcher) {
-            val entry = AudioBookmark(java.util.UUID.randomUUID().toString(), uri, positionMs.coerceAtLeast(0), note.trim().take(500), System.currentTimeMillis())
+            val entry = AudioBookmark(java.util.UUID.randomUUID().toString(), uri, positionMs, note.trim().take(500), System.currentTimeMillis(), endPositionMs)
             preferences.bookmarksRaw = Bookmarks.encode(Bookmarks.decode(preferences.bookmarksRaw) + entry)
         }
     }
 
-    fun editBookmark(id: String, note: String) {
+    fun editIntervalTag(id: String, start: Long, end: Long, note: String) {
+        require(com.imankoppai.mediaanvil.data.IntervalTimes.valid(start, end, 0) && note.isNotBlank())
         viewModelScope.launch(editDispatcher) {
             preferences.bookmarksRaw = Bookmarks.encode(Bookmarks.decode(preferences.bookmarksRaw).map {
-                if (it.id == id) it.copy(note = note.trim().take(500)) else it
+                if (it.id == id) it.copy(positionMs = start, endPositionMs = end, note = note.trim().take(500)) else it
             })
         }
     }

@@ -1,6 +1,9 @@
 package com.imankoppai.mediaanvil.ui
 
 import android.annotation.SuppressLint
+import android.os.Bundle
+import androidx.media3.session.SessionCommand
+import com.imankoppai.mediaanvil.playback.PlaybackService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -108,6 +111,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 @Composable
 internal fun NowPlayingPage(
     library: LibraryViewModel,
@@ -382,7 +386,21 @@ internal fun NowPlayingPage(
     }
 
     if (bookmarksOpen && track != null) {
-        BookmarksSheet(track.uri.toString(), listening, controller, onDismiss = { bookmarksOpen = false })
+        IntervalTagsSheet(track.uri.toString(), listening, controller, track.durationMs, loopA, loopB,
+            onJump = { tag ->
+                loopA = -1; loopB = -1
+                storeLoopPoints(-1, -1)
+                controller?.sendCustomCommand(SessionCommand(PlaybackService.COMMAND_LOOP_CLEAR, Bundle.EMPTY), Bundle.EMPTY)
+                controller?.seekTo(tag.positionMs)
+            },
+            onLoop = { tag ->
+                val end = tag.endPositionMs ?: return@IntervalTagsSheet
+                loopA = tag.positionMs; loopB = end
+                storeLoopPoints(loopA, loopB)
+                controller?.sendCustomCommand(SessionCommand(PlaybackService.COMMAND_LOOP_RANGE, Bundle.EMPTY), Bundle().apply {
+                    putString("uri", tag.trackUri); putLong("start", tag.positionMs); putLong("end", end)
+                })
+            }, onDismiss = { bookmarksOpen = false })
     }
     if (queueOpen) {
         QueueSheet(library, controller, onDismiss = { queueOpen = false })

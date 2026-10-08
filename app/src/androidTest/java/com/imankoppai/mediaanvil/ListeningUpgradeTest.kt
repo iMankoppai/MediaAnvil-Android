@@ -35,11 +35,12 @@ class ListeningUpgradeTest {
         prefs.hiddenTrackUris = setOf("old")
         prefs.recordPlayed("old", 100)
         prefs.savePlaybackSnapshot("old", 100000, listOf("old"), 0, true)
-        prefs.bookmarksRaw = Bookmarks.encode(listOf(AudioBookmark("b", "old", 45000, "第三章", 100)))
+        prefs.bookmarksRaw = Bookmarks.encode(listOf(AudioBookmark("b", "old", 45000, "第三章", 100, 90000)))
         prefs.setLyricsOffset(Uri.parse("old"), 500)
         prefs.setCustomCover(Uri.parse("old"), Uri.parse("content://covers/1"))
         prefs.resumeRewindSeconds = 5
         val root = PlayerDataBackup.createBackup(prefs, listOf(track("old")))
+        assertEquals(4, root.getInt("schemaVersion"))
         val source = BackupTrackReference("old", "episode2.mp3", "Books/", 600000, 123456)
         val match = BackupTrackMatcher.match(source, listOf(source.copy(uri = "new", relativeFolder = "Moved/")))
         val plan = PlayerDataBackup.RestorePlan(root, listOf(match), 1, false)
@@ -55,6 +56,7 @@ class ListeningUpgradeTest {
         assertEquals("new", JSONArray(restored.lastQueueUris).getString(0))
         assertEquals(0, restored.lastQueueIndex)
         assertEquals("new", Bookmarks.decode(restored.bookmarksRaw).single().trackUri)
+        assertEquals(90000L, Bookmarks.decode(restored.bookmarksRaw).single().endPositionMs)
         assertEquals(500L, restored.lyricsOffsetFor(Uri.parse("new")))
         assertEquals(5, restored.resumeRewindSeconds)
     }
