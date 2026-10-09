@@ -4,10 +4,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.ui.MotionDurationScale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 
 // Desktop visual language: light blue canvas, white rounded cards, #1677FF accent.
 private val LightColors = lightColorScheme(
@@ -59,13 +75,46 @@ object ThemeController {
     }
 }
 
+internal const val ThemeTransitionMillis = 300
+internal val LocalThemeIsDark = compositionLocalOf { false }
+
 @Composable
-fun MediaAnvilTheme(
-    darkTheme: Boolean,
-    content: @Composable () -> Unit,
-) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
-        content = content,
-    )
+fun MediaAnvilTheme(darkTheme: Boolean, content: @Composable () -> Unit) {
+    var displayedDark by remember { mutableStateOf(darkTheme) }
+    var previousFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    val opacity = remember { Animatable(0f) }
+    val frame = rememberGraphicsLayer()
+
+    LaunchedEffect(darkTheme) {
+        if (darkTheme == displayedDark && previousFrame == null) return@LaunchedEffect
+        // Capture the visible composite, including a running fade, before changing
+        // the palette. Repeated taps therefore continue from the current picture.
+        val snapshot = if (coroutineContext[MotionDurationScale]?.scaleFactor == 0f ||
+            frame.size.width == 0 || frame.size.height == 0) null
+        else try { frame.toImageBitmap() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null } // A failed capture must not prevent a theme change.
+        coroutineContext.ensureActive()
+        opacity.snapTo(1f)
+        previousFrame = snapshot
+        displayedDark = darkTheme
+        if (snapshot != null) opacity.animateTo(0f, tween(ThemeTransitionMillis, easing = FastOutSlowInEasing))
+        previousFrame = null
+    }
+
+    val colors = if (displayedDark) DarkColors else LightColors
+    CompositionLocalProvider(LocalThemeIsDark provides displayedDark) {
+        MaterialTheme(colorScheme = colors) {
+            Box(Modifier.drawWithContent {
+                frame.record {
+                    drawRect(colors.background)
+                    this@drawWithContent.drawContent()
+                    // Only the drawing layer reads the animation clock: page content
+                    // keeps its final palette and is not recomposed on every frame.
+                    previousFrame?.let { drawImage(it, alpha = opacity.value) }
+                }
+                drawLayer(frame)
+            }) { content() }
+        }
+    }
 }

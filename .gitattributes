@@ -1,0 +1,3 @@
+# Keep upstream OpenCC data byte-stable across Windows and Linux checkouts.
+# The upstream license ends with a blank line, which is intentionally retained.
+app/src/main/resources/opencc/* text eol=lf whitespace=-blank-at-eof

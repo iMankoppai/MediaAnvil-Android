@@ -11,7 +11,7 @@ import org.junit.Rule
 import org.junit.Test
 
 class IntervalLabelsUiTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = DeviceComposeRule()
     @Test fun oldPointNeedsExplicitEndAndInvalidEditsCannotBeSaved() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         var saved: Triple<Long, Long, String>? = null
@@ -27,5 +27,22 @@ class IntervalLabelsUiTest {
         compose.onNodeWithTag("interval_name").performTextReplacement("副歌")
         compose.onNodeWithTag("interval_save").performClick()
         compose.runOnIdle { assertEquals(Triple(113000L,150000L,"副歌"),saved) }
+    }
+    @Test fun editorShowsOnlyMinutesSecondsAndPreservesExistingBoundaries() {
+        var saved: Triple<Long, Long, String>? = null
+        compose.setContent { MaterialTheme {
+            IntervalTagEditor(113123, 150456, "Existing", 267000, { 150000 }, {}, { a,b,n -> saved = Triple(a,b,n) })
+        } }
+        compose.onNodeWithTag("interval_start").assertTextContains("1:53")
+        compose.onNodeWithTag("interval_end").assertTextContains("2:30")
+        compose.onNodeWithTag("interval_name").performTextReplacement("Renamed")
+        compose.onNodeWithTag("interval_save").performClick()
+        compose.runOnIdle { assertEquals(Triple(113123L,150456L,"Renamed"), saved); saved = null }
+        compose.onNodeWithTag("interval_start").performTextReplacement("1:53.123")
+        compose.onNodeWithTag("interval_save").performClick()
+        compose.runOnIdle { assertNull(saved) }
+        compose.onNodeWithTag("interval_start").performTextReplacement("1:50")
+        compose.onNodeWithTag("interval_save").performClick()
+        compose.runOnIdle { assertEquals(Triple(110000L,150456L,"Renamed"), saved) }
     }
 }

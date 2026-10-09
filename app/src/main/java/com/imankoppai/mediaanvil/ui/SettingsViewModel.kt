@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 import com.imankoppai.mediaanvil.data.PlaybackPreferences
 
 /**
@@ -17,6 +19,9 @@ import com.imankoppai.mediaanvil.data.PlaybackPreferences
  */
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     val preferences = PlaybackPreferences(application.applicationContext)
+    private val sleepListener: (String) -> Unit = { key ->
+        if (key == "sleep_episodes_remaining" || key == "sleep_timer_deadline_at") viewModelScope.launch { refreshSleepTimer() }
+    }
 
     fun reload() {
         autoLoadLyrics = preferences.autoLoadLyrics
@@ -55,6 +60,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     /** Epoch-ms deadline of the sleep timer, or null when off. */
     var sleepTimerEndAt by mutableStateOf<Long?>(null)
         private set
+    var sleepEpisodesRemaining by mutableStateOf(0)
+        private set
+    init { preferences.registerChangeListener(sleepListener); refreshSleepTimer() }
 
     /**
      * Arms the sleep timer. The playback service watches the stored deadline and
@@ -62,12 +70,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * the app sits in the background.
      */
     fun startSleepTimer(minutes: Int) {
+        preferences.sleepEpisodesRemaining = 0
         val deadline = System.currentTimeMillis() + minutes * 60_000L
         preferences.sleepTimerDeadlineAt = deadline
         sleepTimerEndAt = deadline
     }
 
     fun cancelSleepTimer() {
+        preferences.sleepEpisodesRemaining = 0
         preferences.sleepTimerDeadlineAt = 0L
         sleepTimerEndAt = null
         refreshSleepTimer()
@@ -77,5 +87,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun refreshSleepTimer() {
         val deadline = preferences.sleepTimerDeadlineAt
         sleepTimerEndAt = deadline.takeIf { it > System.currentTimeMillis() }
+        sleepEpisodesRemaining = preferences.sleepEpisodesRemaining
+    }
+
+    fun startEpisodeTimer(count: Int) {
+        preferences.sleepTimerDeadlineAt = 0L
+        preferences.sleepEpisodesRemaining = count
+        refreshSleepTimer()
+    }
+
+    override fun onCleared() {
+        preferences.unregisterChangeListener(sleepListener)
+        super.onCleared()
     }
 }

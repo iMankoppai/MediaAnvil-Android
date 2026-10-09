@@ -39,12 +39,12 @@ object IntervalTimes {
     }.getOrNull()
 
     fun format(ms: Long): String {
-        val value = ms.coerceAtLeast(0)
-        val seconds = value / 1000
-        val base = if (seconds >= 3600) "%d:%02d:%02d".format(java.util.Locale.ROOT, seconds / 3600, seconds / 60 % 60, seconds % 60)
-            else "%d:%02d".format(java.util.Locale.ROOT, seconds / 60, seconds % 60)
-        return base + if (value % 1000 != 0L) ".%03d".format(java.util.Locale.ROOT, value % 1000) else ""
+        val seconds = ms.coerceAtLeast(0) / 1000
+        return "%d:%02d".format(java.util.Locale.ROOT, seconds / 60, seconds % 60)
     }
+
+    fun parseMinutesSeconds(text: String): Long? =
+        if (Regex("[0-9]+:[0-9]{1,2}").matches(text.trim())) parse(text) else null
 
     fun valid(start: Long?, end: Long?, durationMs: Long): Boolean = start != null && end != null &&
         start >= 0 && end > start && (durationMs <= 0 || end <= durationMs)

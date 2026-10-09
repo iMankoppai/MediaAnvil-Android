@@ -34,9 +34,14 @@ object DeviceAudioLibrary {
             android.Manifest.permission.READ_EXTERNAL_STORAGE
         }
 
+    fun hasReadAccess(context: Context): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(context, readPermission) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     fun scan(context: Context, allowedFolders: Set<String> = emptySet(), previous: LibraryCache.Snapshot? = null,
         full: Boolean = false): LibraryScan {
         val cached = previous?.asScan()?.tracks.orEmpty()
+        val audioReadGranted = hasReadAccess(context)
         val tracks = mutableListOf<AudioTrack>()
         val checkpoints = mutableMapOf<String, MediaCheckpoint>()
         var reused = 0
@@ -50,8 +55,9 @@ object DeviceAudioLibrary {
                     MediaCheckpoint(MediaStore.getVersion(context, volume), MediaStore.getGeneration(context, volume))
                 }.getOrNull() else null
                 val prior = previous?.checkpoints?.get(volume)
-                val canReuse = !full && checkpoint != null && IncrementalLibrary.reusable(prior, checkpoint,
-                    previous?.folderScope.orEmpty(), allowedFolders)
+                val canReuse = !full && previous?.audioReadGranted == audioReadGranted &&
+                    checkpoint != null && IncrementalLibrary.reusable(prior, checkpoint,
+                    previous.folderScope, allowedFolders)
                 val volumeCached = cached.filter { it.uri.pathSegments.firstOrNull() == volume }
                 val delta = if (canReuse && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) runCatching {
                     val old = checkNotNull(prior)
@@ -81,7 +87,8 @@ object DeviceAudioLibrary {
             }
         }
         return LibraryScan(tracks.distinctBy { it.uri }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName }),
-            checkpoints = checkpoints, folderScope = allowedFolders, incremental = reused > 0, metadataRowsRead = rowsRead)
+            checkpoints = checkpoints, folderScope = allowedFolders, incremental = reused > 0, metadataRowsRead = rowsRead,
+            audioReadGranted = audioReadGranted)
     }
 
     private data class TrackRows(val tracks: List<AudioTrack>, val ids: Set<String>, val rowsRead: Int)

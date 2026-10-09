@@ -79,6 +79,7 @@ internal fun LyricsView(
     var statusMessage by remember(track.uri) { mutableStateOf<String?>(null) }
     var savingId by remember(track.uri) { mutableStateOf<Long?>(null) }
     var previewCandidate by remember(track.uri) { mutableStateOf<OnlineLyricsCandidate?>(null) }
+    var lyricsScript by remember(track.uri) { mutableStateOf(com.imankoppai.mediaanvil.subtitles.LyricsScript.from(settings.preferences.lyricsScript)) }
     var managingLyrics by remember(track.uri) { mutableStateOf(false) }
     var managementMenu by remember(track.uri) { mutableStateOf(false) }
     var confirmDelete by remember(track.uri) { mutableStateOf(false) }
@@ -178,19 +179,19 @@ internal fun LyricsView(
         }
     }
 
-    fun saveCandidate(candidate: OnlineLyricsCandidate) {
+    fun saveCandidate(candidate: OnlineLyricsCandidate, lyrics: String) {
         if (savingId != null) return
         withFolderAccess {
             savingId = candidate.id
             statusMessage = null
             scope.launch {
                 val saved = withContext(Dispatchers.IO) {
-                    runCatching { LyricsFileStore.save(context, track, candidate.syncedLyrics) }
+                    runCatching { LyricsFileStore.save(context, track, lyrics) }
                 }
                 savingId = null
                 saved.onSuccess { savedUri ->
                     library.attachLyrics(track.uri, savedUri, "lrc")
-                    cues = PreviewLyrics.parseLrcTimeline(candidate.syncedLyrics)
+                    cues = PreviewLyrics.parseLrcTimeline(lyrics)
                     candidates = emptyList()
                     previewCandidate = null
                     managingLyrics = false
@@ -264,85 +265,11 @@ internal fun LyricsView(
                 }
                 previewCandidate != null -> {
                     val candidate = requireNotNull(previewCandidate)
-                    val previewCues = remember(candidate.id, candidate.syncedLyrics) {
-                        PreviewLyrics.parseLrcTimeline(candidate.syncedLyrics)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            stringResource(R.string.online_lyrics_preview),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        androidx.compose.material3.TextButton(
-                            enabled = savingId == null,
-                            onClick = {
-                                previewCandidate = null
-                                statusMessage = null
-                            },
-                        ) {
-                            Text(stringResource(R.string.online_lyrics_back_to_results))
-                        }
-                    }
-                    Text(
-                        listOf(candidate.trackName, candidate.artistName)
-                            .filter(String::isNotBlank)
-                            .joinToString(" · "),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (candidate.possibleMismatch) {
-                        Text(
-                            stringResource(R.string.online_lyrics_possible_mismatch),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    statusMessage?.let {
-                        Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        itemsIndexed(
-                            previewCues,
-                            key = { index, cue -> "${cue.startMs}-$index" },
-                        ) { _, cue ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSeek(cue.startMs) }
-                                    .padding(vertical = 5.dp),
-                                verticalAlignment = Alignment.Top,
-                            ) {
-                                Text(
-                                    formatTime(cue.startMs),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.width(52.dp),
-                                )
-                                Text(
-                                    cue.text.ifEmpty { " " },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                    }
-                    Button(
-                        enabled = savingId == null && previewCues.isNotEmpty(),
-                        onClick = { saveCandidate(candidate) },
-                    ) {
-                        Text(
-                            stringResource(
-                                if (savingId == null) R.string.online_lyrics_confirm_save
-                                else R.string.online_lyrics_saving,
-                            ),
-                        )
-                    }
+                    LyricsCandidatePreview(candidate, lyricsScript,
+                        onScript = { lyricsScript = it; settings.preferences.lyricsScript = it.value },
+                        saving = savingId != null, statusMessage = statusMessage,
+                        onBack = { previewCandidate = null; statusMessage = null },
+                        onSeek = onSeek, onSave = { saveCandidate(candidate, it) })
                 }
                 candidates.isNotEmpty() -> {
                     Row(

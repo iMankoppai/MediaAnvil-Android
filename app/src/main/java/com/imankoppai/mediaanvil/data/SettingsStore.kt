@@ -52,15 +52,13 @@ private fun MutablePreferences.writeEntries(entries: Map<String, Any?>) {
 /**
  * Durable settings storage built on Preferences DataStore.
  *
- * DataStore replaces SharedPreferences because it writes asynchronously without
- * rewriting the whole file, detects corruption instead of silently returning
- * defaults, and has no `commit()` that blocks whichever thread happens to call it.
+ * DataStore writes asynchronously. Indexed progress values avoid reconstructing
+ * JSON history on the caller's thread; DataStore serializes its file in the background.
  *
  * Reads stay synchronous because every caller ([PlaybackPreferences], the playback
  * service's notification buttons, the theme controller at startup) expects a plain
  * value. That is achieved with an in-memory snapshot loaded exactly once:
- * the first construction performs a single blocking read, which is the same
- * one-time disk cost `getSharedPreferences()` already paid on first use, and every
+ * the first construction performs a single read (preloaded on IO by MainActivity), and every
  * read afterwards is a map lookup. Writes update the snapshot immediately and are
  * persisted asynchronously, except for the few callers that ask for a synchronous
  * write because the process may die right after it.
@@ -116,9 +114,14 @@ internal class SettingsStore private constructor(
     fun getFloat(name: String, fallback: Float): Float =
         synchronized(values) { values[name] as? Float } ?: fallback
 
+    fun entriesWithPrefix(prefix: String): Map<String, Any?> = synchronized(values) {
+        values.filterKeys { it.startsWith(prefix) }
+    }
+
     fun getStringSet(name: String, fallback: Set<String>): Set<String>? =
         synchronized(values) {
             when (val value = values[name]) {
+                is Set<*> -> @Suppress("UNCHECKED_CAST") (value as Set<String>)
                 is Collection<*> -> value.filterIsInstance<String>().toSet()
                 else -> null
             }
@@ -135,7 +138,7 @@ internal class SettingsStore private constructor(
     /** Stores several values in one DataStore transaction. */
     fun putAll(entries: Map<String, Any?>, synchronous: Boolean = false) {
         if (entries.isEmpty()) return
-        synchronized(values) { values.putAll(entries) }
+        synchronized(values) { entries.forEach { (key, value) -> if (value == null) values.remove(key) else values[key] = value } }
         entries.keys.forEach(::notifyListeners)
 
         // Chain onto the previous write so this one cannot overtake it, and record the
@@ -252,6 +255,16 @@ internal class SettingsStore private constructor(
                     runBlocking { dataStore.edit { it.writeEntries(plan) } }
                 }
                 snapshot.putAll(plan)
+            }
+            // Expand the legacy JSON once on the loading thread. Periodic progress
+            // saves then update a single numeric preference, without parsing history.
+            if (snapshot["progress_indexed"] != true) {
+                val progress = runCatching { org.json.JSONObject(snapshot["playback_positions"] as? String ?: "{}") }
+                    .getOrElse { org.json.JSONObject() }
+                val entries = linkedMapOf<String, Any?>("progress_indexed" to true, "playback_positions" to null)
+                progress.keys().forEach { uri -> entries["progress:$uri"] = progress.optLong(uri) }
+                runBlocking { dataStore.edit { it.writeEntries(entries) } }
+                snapshot.putAll(entries)
             }
             return SettingsStore(dataStore, snapshot)
         }

@@ -9,6 +9,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
 
 /**
  * Cheap embedded-cover display for the UI: reads artwork through
@@ -26,13 +32,21 @@ object CoverLoader {
         override fun sizeOf(key: String, value: ImageBitmap): Int =
             value.width * value.height * 4
     }
+    var revision by mutableIntStateOf(0)
+        private set
+    private val requests = ArtworkRequests(CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        { key -> cache.get(key) }, { key, value -> cache.put(key, value); Unit }, android.os.SystemClock::elapsedRealtime)
+
+    fun invalidate() {
+        requests.invalidate { cache.evictAll() }
+        revision++
+    }
 
     suspend fun load(context: Context, uri: Uri, thumbnail: Boolean): ImageBitmap? {
         val key = if (thumbnail) "thumb:$uri" else uri.toString()
-        cache.get(key)?.let { return it }
         val target = if (thumbnail) THUMBNAIL_TARGET_PX else 1024
-        val loaded = withContext(Dispatchers.IO) {
-            runCatching {
+        return requests.load(key) {
+            try {
                 val retriever = MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(context, uri)
@@ -42,17 +56,15 @@ object CoverLoader {
                 } finally {
                     retriever.release()
                 }
-            }.getOrNull()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
         }
-        if (loaded != null) cache.put(key, loaded)
-        return loaded
     }
 
     suspend fun loadImage(context: Context, uri: Uri): ImageBitmap? {
         val key = "image:$uri"
-        cache.get(key)?.let { return it }
-        val loaded = withContext(Dispatchers.IO) {
-            runCatching {
+        return requests.load(key) {
+            try {
                 val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
                     val source = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
                     android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
@@ -61,26 +73,22 @@ object CoverLoader {
                         val longest = maxOf(width, height)
                         if (longest > 1024) {
                             val scale = 1024f / longest
-                            decoder.setTargetSize((width * scale).toInt(), (height * scale).toInt())
+                            decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
                         }
                     }
                 } else {
                     decodeDocumentImage(context, uri)
                 }
                 bitmap.asImageBitmap()
-            }.getOrNull()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
         }
-        if (loaded != null) cache.put(key, loaded)
-        return loaded
     }
 
     private fun decodeDocumentImage(context: Context, uri: Uri, target: Int = 1024): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, bounds) }
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= target && bounds.outHeight / (sample * 2) >= target) {
-            sample *= 2
-        }
+        val sample = artworkSampleSize(bounds.outWidth, bounds.outHeight, target)
         val options = BitmapFactory.Options().apply { inSampleSize = sample }
         return requireNotNull(
             context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, options) },
@@ -91,10 +99,7 @@ object CoverLoader {
     private fun decodeScaled(bytes: ByteArray, target: Int = 1024): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= target && bounds.outHeight / (sample * 2) >= target) {
-            sample *= 2
-        }
+        val sample = artworkSampleSize(bounds.outWidth, bounds.outHeight, target)
         val options = BitmapFactory.Options().apply { inSampleSize = sample }
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }

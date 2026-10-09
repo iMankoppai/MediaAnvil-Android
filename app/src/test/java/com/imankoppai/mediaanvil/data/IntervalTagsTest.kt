@@ -32,8 +32,14 @@ class IntervalTagsTest {
             assertNull(it, IntervalTimes.parse(it))
         }
     }
-    @Test fun editFormattingDoesNotLosePrecision() {
-        listOf(0L, 123L, 113123L, 3600000L, 3723456L).forEach { assertEquals(it, IntervalTimes.parse(IntervalTimes.format(it))) }
+    @Test fun displayUsesMinutesAndWholeSecondsIncludingLongAudio() {
+        val expected = mapOf(0L to "0:00", 123L to "0:00", 113123L to "1:53", 3600000L to "60:00", 3723456L to "62:03")
+        expected.forEach { (time, label) -> assertEquals(label, IntervalTimes.format(time)) }
+    }
+    @Test fun editorAcceptsOnlyMinutesAndSeconds() {
+        assertEquals(113000L, IntervalTimes.parseMinutesSeconds("1:53"))
+        assertEquals(7205000L, IntervalTimes.parseMinutesSeconds("120:05"))
+        listOf("1:53.123", "1:02:03", "1:60", "113", "").forEach { assertNull(IntervalTimes.parseMinutesSeconds(it)) }
     }
     @Test fun boundariesMustBeOrderedAndFitKnownDuration() {
         assertTrue(IntervalTimes.valid(1000, 2000, 2000))

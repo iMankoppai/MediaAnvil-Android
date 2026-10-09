@@ -25,9 +25,8 @@ import java.io.File
  * records, so an optimisation can be shown to have helped instead of merely
  * being believed to have helped.
  *
- * Every measurement is repeated and the **best** time is reported: the fastest run
- * is the one least polluted by other work on the device, which is what a "how long
- * does this actually take" number should reflect.
+ * Every measurement reports median, p95 and minimum, so occasional long stalls
+ * remain visible instead of disappearing behind the fastest sample.
  */
 @RunWith(AndroidJUnit4::class)
 class Phase5PerformanceTest {
@@ -39,7 +38,7 @@ class Phase5PerformanceTest {
     }
 
     /**
-     * Runs [block] [runs] times and reports the fastest, in **microseconds**.
+     * Runs [block] [runs] times and reports the distribution in microseconds.
      *
      * Milliseconds are too coarse: a warm settings read and a cache load both round
      * to 0, which hides the difference an optimisation is supposed to make.
@@ -50,14 +49,15 @@ class Phase5PerformanceTest {
      */
     private fun measure(name: String, runs: Int = 7, block: () -> Unit) {
         repeat(2) { block() } // warm up
-        var best = Long.MAX_VALUE
+        val samples = mutableListOf<Long>()
         repeat(runs) {
             val started = System.nanoTime()
             block()
             val elapsed = (System.nanoTime() - started) / 1_000
-            if (elapsed < best) best = elapsed
+            samples += elapsed
         }
-        report("$name ${best}us")
+        val ordered = samples.sorted()
+        report("$name median=${ordered[ordered.size / 2]}us p95=${ordered[(kotlin.math.ceil(ordered.size * 0.95).toInt() - 1).coerceAtLeast(0)]}us min=${ordered.first()}us")
     }
 
     private fun report(line: String) {
@@ -152,11 +152,9 @@ class Phase5PerformanceTest {
         val scan = LibraryScan(tracks)
 
         measure("sidecar_pass_over_300_tracks", runs = 20) {
-            tracks.map { track ->
-                if (track.subtitleUri != null) track
-                else track.copy(subtitleUri = null, subtitleExtension = null)
-            }
+            com.imankoppai.mediaanvil.data.SafStorage.findSubtitles(context, tracks)
         }
+        report("sidecar_granted_trees ${com.imankoppai.mediaanvil.data.SafStorage.grantedTrees(context).size}")
         report("sidecar_track_count ${scan.tracks.size}")
     }
 

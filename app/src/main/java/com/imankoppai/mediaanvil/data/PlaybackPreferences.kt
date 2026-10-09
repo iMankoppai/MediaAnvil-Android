@@ -53,6 +53,69 @@ class PlaybackPreferences(context: Context) {
             store.put("playback_speed", value)
         }
 
+    fun speedFor(uri: String, folder: String): Float = effectivePlaybackSpeed(
+        store.getFloat("track_speed:$uri", Float.NaN).takeIf(Float::isFinite),
+        folderSpeed(folder), playbackSpeed)
+
+    fun setTrackSpeeds(uris: Collection<String>, speed: Float?) {
+        require(speed == null || speed in playbackSpeeds)
+        store.putAll(uris.associate { "track_speed:$it" to speed })
+    }
+
+    fun folderSpeed(folder: String): Float? = store.getFloat("work_speed:$folder", Float.NaN).takeIf(Float::isFinite)
+    fun folderRewind(folder: String): Int? = store.getInt("work_rewind:$folder", -1).takeIf { it >= 0 }
+    fun rewindFor(folder: String): Int = folderRewind(folder) ?: resumeRewindSeconds
+    fun folderOrder(folder: String): String? = store.getString("work_order:$folder", null)
+    fun orderFor(folder: String): String = folderOrder(folder) ?: "natural"
+
+    fun setWorkPlayback(folder: String, speed: Float?, rewind: Int?, order: String?) {
+        require(speed == null || speed in playbackSpeeds)
+        store.putAll(mapOf("work_speed:$folder" to speed, "work_rewind:$folder" to rewind,
+            "work_order:$folder" to order))
+    }
+
+    internal fun scopedPlaybackJson(): JSONObject = JSONObject().apply {
+        listOf("track_speed:", "work_speed:", "work_rewind:", "work_order:").forEach { prefix ->
+            store.entriesWithPrefix(prefix).forEach { (key, value) -> if (value != null) put(key, value) }
+        }
+    }
+
+    var lyricsScript: String
+        get() = store.getString("lyrics_script", "original") ?: "original"
+        set(value) {
+            require(value in setOf("original", "simplified", "traditional"))
+            store.put("lyrics_script", value)
+        }
+
+    fun fullPlayCounts(): Map<String, Long> = store.entriesWithPrefix("full_play_count:")
+        .mapNotNull { (key, value) -> (value as? Long)?.takeIf { it > 0 }?.let { key.removePrefix("full_play_count:") to it } }.toMap()
+
+    fun fullPlayCount(uri: String): Long = store.getLong("full_play_count:$uri", 0L).coerceAtLeast(0)
+
+    internal fun fullPlayAttempt(uri: String): com.imankoppai.mediaanvil.playback.FullPlayAttempt? = runCatching {
+        val json = JSONObject(store.getString("full_play_attempt:$uri", null) ?: return null)
+        val through = json.getLong("throughMs")
+        val duration = json.getLong("durationMs")
+        if (duration > 0 && through in 1..duration) com.imankoppai.mediaanvil.playback.FullPlayAttempt(through, duration) else null
+    }.getOrNull()
+
+    internal fun saveFullPlayAttempt(uri: String, attempt: com.imankoppai.mediaanvil.playback.FullPlayAttempt?) {
+        val value = attempt?.let { JSONObject().put("throughMs", it.throughMs).put("durationMs", it.durationMs).toString() }
+        if (store.getString("full_play_attempt:$uri", null) != value) store.put("full_play_attempt:$uri", value)
+    }
+
+    internal fun incrementFullPlayCount(uri: String) {
+        val current = fullPlayCount(uri)
+        store.putAll(mapOf("full_play_count:$uri" to if (current == Long.MAX_VALUE) current else current + 1,
+            "full_play_attempt:$uri" to null))
+    }
+
+    internal fun fullPlayAttemptsJson(): JSONObject = JSONObject().apply {
+        store.entriesWithPrefix("full_play_attempt:").forEach { (key, value) ->
+            if (value is String) runCatching { put(key.removePrefix("full_play_attempt:"), JSONObject(value)) }
+        }
+    }
+
     var seekBackSeconds: Int
         get() = store.getInt("seek_back_seconds", 5).coerceIn(1, 300)
         set(value) {
@@ -162,46 +225,49 @@ class PlaybackPreferences(context: Context) {
 
     /** JSON object mapping track uri -> saved playback position in ms. */
     var playbackPositions: String
-        get() = store.getString("playback_positions", "{}") ?: "{}"
+        get() = JSONObject().apply {
+            store.entriesWithPrefix("progress:").forEach { (key, value) ->
+                if (value is Long && value > 0L) put(key.removePrefix("progress:"), value)
+            }
+        }.toString()
         set(value) {
-            store.put("playback_positions", value)
+            store.putAll(positionEntries(JSONObject(value)))
         }
 
-    fun playbackPositionFor(uri: String): Long = runCatching {
-        JSONObject(playbackPositions).optLong(uri, -1L)
-    }.getOrDefault(-1L)
+    var sleepEpisodesRemaining: Int
+        get() = store.getInt("sleep_episodes_remaining", 0).coerceIn(0, 99)
+        set(value) { store.put("sleep_episodes_remaining", value.coerceIn(0, 99)) }
+
+    fun playbackPositionFor(uri: String): Long = store.getLong("progress:$uri", -1L)
 
     fun setPlaybackPosition(uri: String, positionMs: Long) {
-        runCatching {
-            val root = JSONObject(playbackPositions)
-            if (positionMs > 0L) root.put(uri, positionMs) else root.remove(uri)
-            store.put("playback_positions", root.toString())
-        }
+        store.put("progress:$uri", positionMs.takeIf { it > 0L })
     }
+
+    private fun positionEntries(positions: JSONObject): Map<String, Any?> =
+        store.entriesWithPrefix("progress:").keys.associateWith<String, Any?> { null }.toMutableMap().apply {
+            positions.keys().forEach { uri -> put("progress:$uri", positions.optLong(uri).takeIf { it > 0L }) }
+        }
 
     /** Saves the resume position and queue in one disk transaction. */
     fun savePlaybackSnapshot(
         uri: String,
         positionMs: Long,
-        queueUris: List<String>,
+        queueUris: List<String>?,
         queueIndex: Int,
         synchronous: Boolean,
         completed: Boolean = false,
     ) {
         runCatching {
-            val positions = JSONObject(playbackPositions)
-            if (positionMs > 0L) positions.put(uri, positionMs) else positions.remove(uri)
             store.putAll(
-                mapOf(
-                    "playback_positions" to positions.toString(),
-                    "last_queue_uris" to JSONArray(queueUris).toString(),
-                    "last_queue_index" to queueIndex,
-                    "finished_track_uris" to when {
-                        completed -> finishedTrackUris + uri
-                        positionMs > 0 -> finishedTrackUris - uri
-                        else -> finishedTrackUris
-                    },
-                ),
+                buildMap<String, Any?> {
+                    put("progress:$uri", positionMs.takeIf { it > 0L })
+                    if (queueUris != null) put("last_queue_uris", JSONArray(queueUris).toString())
+                    put("last_queue_index", queueIndex)
+                    val finished = finishedTrackUris
+                    if (completed && uri !in finished) put("finished_track_uris", finished + uri)
+                    else if (!completed && positionMs > 0L && uri in finished) put("finished_track_uris", finished - uri)
+                },
                 synchronous = synchronous,
             )
         }
@@ -239,12 +305,14 @@ class PlaybackPreferences(context: Context) {
         set(value) { store.put("resume_rewind_seconds", value.coerceIn(0, 30)) }
 
     fun markFinished(uri: String, finished: Boolean) {
-        val positions = JSONObject(playbackPositions)
-        if (finished) positions.remove(uri)
-        store.putAll(mapOf(
-            "finished_track_uris" to if (finished) finishedTrackUris + uri else finishedTrackUris - uri,
-            "playback_positions" to positions.toString(),
-        ))
+        markFinished(listOf(uri), finished)
+    }
+
+    fun markFinished(uris: Collection<String>, finished: Boolean) {
+        store.putAll(buildMap {
+            put("finished_track_uris", if (finished) finishedTrackUris + uris else finishedTrackUris - uris.toSet())
+            if (finished) uris.forEach { put("progress:$it", null) }
+        })
     }
 
     /** Epoch-ms of the last automatic update check, throttling it to once a day. */
@@ -453,6 +521,7 @@ class PlaybackPreferences(context: Context) {
             "lyrics_offsets" to offsets.toString(),
         )
         if (favorites != null) {
+            // Favourites and playback profiles both retain the backup's explicit choices.
             restored["favorite_track_uris"] = JSONArray().apply {
                 for (index in 0 until favorites.length()) {
                     val uri = favorites.optString(index)
@@ -461,9 +530,42 @@ class PlaybackPreferences(context: Context) {
             }.toString()
         }
         if (history != null) restored["play_history"] = history
+        if (settings.has("lyricsScript")) {
+            restored["lyrics_script"] = settings.getString("lyricsScript").takeIf {
+                it in setOf("original", "simplified", "traditional")
+            } ?: "original"
+        }
+        root.optJSONObject("fullPlayCounts")?.let { counts ->
+            store.entriesWithPrefix("full_play_count:").keys.forEach { restored[it] = null }
+            counts.keys().forEach { uri -> counts.optLong(uri).takeIf { it > 0 }?.let { restored["full_play_count:$uri"] = it } }
+        }
+        root.optJSONObject("fullPlayAttempts")?.let { attempts ->
+            store.entriesWithPrefix("full_play_attempt:").keys.forEach { restored[it] = null }
+            attempts.keys().forEach { uri ->
+                val attempt = attempts.optJSONObject(uri) ?: return@forEach
+                val through = attempt.optLong("throughMs")
+                val duration = attempt.optLong("durationMs")
+                if (duration > 0 && through in 1..duration) restored["full_play_attempt:$uri"] = attempt.toString()
+            }
+        }
+        root.optJSONObject("scopedPlayback")?.let { scoped ->
+            listOf("track_speed:", "work_speed:", "work_rewind:", "work_order:").forEach { prefix ->
+                store.entriesWithPrefix(prefix).keys.forEach { restored[it] = null }
+            }
+            scoped.keys().forEach { key ->
+                when {
+                    key.startsWith("track_speed:") || key.startsWith("work_speed:") -> {
+                        val speed = scoped.optDouble(key).toFloat()
+                        if (speed in playbackSpeeds) restored[key] = speed
+                    }
+                    key.startsWith("work_rewind:") -> restored[key] = scoped.optInt(key).coerceIn(0, 30)
+                    key.startsWith("work_order:") -> scoped.optString(key).takeIf { it in setOf("natural", "shuffle", "loop") }?.let { restored[key] = it }
+                }
+            }
+        }
 
         // Optional keys keep old backups from erasing newer playback data/settings.
-        if (root.has("playbackPositions")) restored["playback_positions"] = root.getJSONObject("playbackPositions").toString()
+        if (root.has("playbackPositions")) restored.putAll(positionEntries(root.getJSONObject("playbackPositions")))
         if (root.has("lastQueueUris")) restored["last_queue_uris"] = root.getJSONArray("lastQueueUris").toString()
         if (root.has("lastQueueIndex")) restored["last_queue_index"] = root.getInt("lastQueueIndex")
         if (root.has("trackReferences")) restored["backup_track_references"] = root.getJSONArray("trackReferences").toString()

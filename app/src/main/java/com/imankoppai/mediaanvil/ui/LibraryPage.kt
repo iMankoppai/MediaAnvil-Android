@@ -130,6 +130,7 @@ internal fun LibraryPage(
     var selectionMode by remember { mutableStateOf(false) }
     var selectedUris by remember { mutableStateOf(setOf<String>()) }
     var groupDialogOpen by remember { mutableStateOf(false) }
+    var speedDialogOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
@@ -171,16 +172,9 @@ internal fun LibraryPage(
 
     val unknownAlbumLabel = stringResource(R.string.unknown_album)
     val unknownArtistLabel = stringResource(R.string.unknown_artist)
-    val albumGroups = remember(library.tracks, unknownAlbumLabel) {
-        library.tracks.groupBy { track -> track.album?.takeIf { album -> album.isNotBlank() } ?: unknownAlbumLabel }
-            .map { (name, tracks) -> name to tracks }
-            .sortedBy { it.first.lowercase() }
-    }
-    val artistGroups = remember(library.tracks, unknownArtistLabel) {
-        library.tracks.groupBy { track -> track.artist?.takeIf { artist -> artist.isNotBlank() } ?: unknownArtistLabel }
-            .map { (name, tracks) -> name to tracks }
-            .sortedBy { it.first.lowercase() }
-    }
+    val groups = rememberLibraryGroups(library.tracks, unknownAlbumLabel, unknownArtistLabel)
+    val albumGroups = groups?.albums.orEmpty()
+    val artistGroups = groups?.artists.orEmpty()
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize()) {
@@ -272,7 +266,7 @@ internal fun LibraryPage(
 
                 when {
                     library.tracks.isEmpty() && !library.loading -> when {
-                        !library.hasStorageAccess() -> EmptyLibrary(
+                        !library.storageAccessGranted -> EmptyLibrary(
                             hint = stringResource(R.string.storage_access_hint),
                             actionLabel = stringResource(R.string.storage_access_action),
                             onAction = onRequestStorageAccess,
@@ -357,6 +351,9 @@ internal fun LibraryPage(
                                 }
                                 androidx.compose.material3.TextButton(onClick = { groupDialogOpen = true }) {
                                     Text(stringResource(R.string.selection_add_group))
+                                }
+                                TextButton(enabled = selectedUris.isNotEmpty(), onClick = { speedDialogOpen = true }) {
+                                    Text(stringResource(R.string.batch_speed))
                                 }
                                 androidx.compose.material3.TextButton(onClick = {
                                     selectedUris.forEach { uri ->
@@ -460,6 +457,7 @@ internal fun LibraryPage(
                             }
                             MusicView.Albums -> GroupBrowser(
                                 groups = albumGroups,
+                                loading = groups == null,
                                 openGroup = openGroup,
                                 onOpenGroup = { openGroup = it },
                                 groupIcon = Icons.Filled.Album,
@@ -471,6 +469,7 @@ internal fun LibraryPage(
                             )
                             MusicView.Artists -> GroupBrowser(
                                 groups = artistGroups,
+                                loading = groups == null,
                                 openGroup = openGroup,
                                 onOpenGroup = { openGroup = it },
                                 groupIcon = Icons.Filled.Person,
@@ -506,6 +505,9 @@ internal fun LibraryPage(
     if (queueOpen) {
         QueueSheet(library, controller, onDismiss = { queueOpen = false })
     }
+    if (speedDialogOpen) BatchSpeedDialog(
+        onApply = { settings.preferences.setTrackSpeeds(selectedUris, it) },
+        onDismiss = { speedDialogOpen = false })
 }
 
 @Composable
@@ -592,561 +594,4 @@ private fun TopBar(
             }
         }
     }
-}
-
-@Composable
-private fun TrackGroupView(
-    library: LibraryViewModel,
-    playlists: PlaylistViewModel,
-    settings: SettingsViewModel,
-    controller: androidx.media3.session.MediaController?,
-    openGroupId: String?,
-    onOpenGroup: (String?) -> Unit,
-    onEditTrack: (AudioTrack) -> Unit,
-) {
-    var editingNameFor by remember { mutableStateOf<String?>(null) }
-    var nameInput by remember { mutableStateOf("") }
-    var nameError by remember { mutableStateOf(false) }
-    var selectingTracksFor by remember { mutableStateOf<String?>(null) }
-
-    fun openNameDialog(group: TrackGroup?) {
-        editingNameFor = group?.id ?: ""
-        nameInput = group?.name.orEmpty()
-        nameError = false
-    }
-
-    val openGroup = playlists.trackGroups.firstOrNull { it.id == openGroupId }
-    if (openGroupId != null && openGroup == null) {
-        LaunchedEffect(openGroupId) { onOpenGroup(null) }
-    }
-
-    if (openGroup == null) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(R.string.groups_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { openNameDialog(null) }) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.group_create))
-                }
-            }
-            if (playlists.trackGroups.isEmpty()) {
-                SectionPlaceholder(stringResource(R.string.groups_empty))
-            } else {
-                LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                    itemsIndexed(playlists.trackGroups, key = { _, group -> group.id }) { _, group ->
-                        val availableCount = library.tracks.count { it.uri.toString() in group.trackUris }
-                        var menuOpen by remember(group.id) { mutableStateOf(false) }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onOpenGroup(group.id) }
-                                .padding(start = 8.dp, top = 10.dp, bottom = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(group.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    stringResource(R.string.folder_track_count, availableCount),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Box {
-                                IconButton(onClick = { menuOpen = true }) {
-                                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.group_manage))
-                                }
-                                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.group_rename)) },
-                                        onClick = {
-                                            menuOpen = false
-                                            openNameDialog(group)
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.group_delete)) },
-                                        onClick = {
-                                            menuOpen = false
-                                            playlists.deleteGroup(group.id)
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    item { Spacer(Modifier.height(96.dp)) }
-                }
-            }
-        }
-    } else {
-        // Resolved through the saved uri order, so the list plays back in the order
-        // the user arranged rather than in library order.
-        val groupTracks = remember(library.tracks, openGroup.trackUris) {
-            playlists.tracksInGroup(openGroup, library.tracks)
-        }
-        var menuOpen by remember(openGroup.id) { mutableStateOf(false) }
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = { onOpenGroup(null) }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
-                }
-                Text(
-                    openGroup.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { selectingTracksFor = openGroup.id }) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Text(stringResource(R.string.group_add_tracks))
-                }
-                Box {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.group_manage))
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.group_rename)) },
-                            onClick = {
-                                menuOpen = false
-                                openNameDialog(openGroup)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.group_delete)) },
-                            onClick = {
-                                menuOpen = false
-                                playlists.deleteGroup(openGroup.id)
-                                onOpenGroup(null)
-                            },
-                        )
-                    }
-                }
-            }
-            if (groupTracks.isEmpty()) {
-                SectionPlaceholder(stringResource(R.string.group_tracks_empty))
-            } else {
-                LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                    itemsIndexed(groupTracks, key = { _, track -> track.uri.toString() }) { _, track ->
-                        TrackRow(
-                            track = track,
-                            current = track.uri == library.selectedTrack?.uri,
-                            onClick = { playFromLibrary(library, settings, controller, groupTracks.indexOf(track), groupTracks) },
-                            onEdit = { onEditTrack(track) },
-                            onRemoveFromGroup = { playlists.removeTrackFromGroup(openGroup.id, track.uri) },
-                            onRemoveFromPlayer = {
-                                removeTrackFromPlayer(library, playlists, controller, track)
-                            },
-                            isFavorite = playlists.isFavorite(track.uri),
-                            onToggleFavorite = { playlists.toggleFavorite(track.uri) },
-                        )
-                    }
-                    item { Spacer(Modifier.height(96.dp)) }
-                }
-            }
-        }
-    }
-
-    editingNameFor?.let { groupId ->
-        AlertDialog(
-            onDismissRequest = { editingNameFor = null },
-            title = { Text(stringResource(if (groupId.isEmpty()) R.string.group_create else R.string.group_rename)) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = nameInput,
-                        onValueChange = {
-                            nameInput = it
-                            nameError = false
-                        },
-                        label = { Text(stringResource(R.string.group_name)) },
-                        singleLine = true,
-                        isError = nameError,
-                    )
-                    if (nameError) {
-                        Text(
-                            stringResource(R.string.group_name_error),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val saved = if (groupId.isEmpty()) playlists.createGroup(nameInput)
-                    else playlists.renameGroup(groupId, nameInput)
-                    if (saved) editingNameFor = null else nameError = true
-                }) { Text(stringResource(R.string.save)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { editingNameFor = null }) { Text(stringResource(R.string.cancel)) }
-            },
-        )
-    }
-
-    selectingTracksFor?.let { groupId ->
-        playlists.trackGroups.firstOrNull { it.id == groupId }?.let { group ->
-            GroupTrackPicker(
-                group = group,
-                tracks = library.tracks,
-                onSave = {
-                    playlists.setGroupTracks(group.id, it)
-                    selectingTracksFor = null
-                },
-                onDismiss = { selectingTracksFor = null },
-            )
-        }
-    }
-}
-
-@Composable
-private fun GroupTrackPicker(
-    group: TrackGroup,
-    tracks: List<AudioTrack>,
-    onSave: (List<String>) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var selected by remember(group.id, group.trackUris) { mutableStateOf(group.trackUris.toSet()) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.group_choose_tracks, group.name)) },
-        text = {
-            if (tracks.isEmpty()) {
-                Text(stringResource(R.string.no_tracks))
-            } else {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
-                    itemsIndexed(tracks, key = { _, track -> track.uri.toString() }) { _, track ->
-                        val key = track.uri.toString()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { selected = if (key in selected) selected - key else selected + key }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(
-                                checked = key in selected,
-                                onCheckedChange = { checked ->
-                                    selected = if (checked) selected + key else selected - key
-                                },
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    track.artist ?: stringResource(R.string.unknown_artist),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                // Keep the group's existing order, then append whatever the picker
-                // added, so saving from the picker never reshuffles the playlist.
-                val ordered = group.trackUris.filter { it in selected } +
-                    tracks.map { it.uri.toString() }.filter { it in selected && it !in group.trackUris }
-                onSave(ordered)
-            }) { Text(stringResource(R.string.save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-        },
-    )
-}
-
-@Composable
-private fun GroupBrowser(
-    groups: List<Pair<String, List<AudioTrack>>>,
-    openGroup: String?,
-    onOpenGroup: (String?) -> Unit,
-    groupIcon: ImageVector,
-    library: LibraryViewModel,
-    playlists: PlaylistViewModel,
-    settings: SettingsViewModel,
-    controller: androidx.media3.session.MediaController?,
-    onEditTrack: (AudioTrack) -> Unit,
-) {
-    if (openGroup == null) {
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-            itemsIndexed(groups, key = { _, group -> group.first }) { _, group ->
-                val (name, tracks) = group
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { onOpenGroup(name) }
-                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(groupIcon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            stringResource(R.string.folder_track_count, tracks.size),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            item { Spacer(Modifier.height(96.dp)) }
-        }
-    } else {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenGroup(null) }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    openGroup,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            val groupTracks = groups.firstOrNull { it.first == openGroup }?.second ?: emptyList()
-            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                itemsIndexed(groupTracks, key = { _, track -> track.uri.toString() }) { _, track ->
-                    TrackRow(
-                        track = track,
-                        current = track.uri == library.selectedTrack?.uri,
-                        onClick = { playFromLibrary(library, settings, controller, groupTracks.indexOf(track), groupTracks) },
-                        onEdit = { onEditTrack(track) },
-                        onRemoveFromPlayer = {
-                            removeTrackFromPlayer(library, playlists, controller, track)
-                        },
-                        isFavorite = playlists.isFavorite(track.uri),
-                        onToggleFavorite = { playlists.toggleFavorite(track.uri) },
-                    )
-                }
-                item { Spacer(Modifier.height(96.dp)) }
-            }
-        }
-    }
-}
-
-@Composable
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-internal fun TrackRow(
-    track: AudioTrack,
-    current: Boolean,
-    onClick: () -> Unit,
-    onEdit: (() -> Unit)? = null,
-    onRemoveFromGroup: (() -> Unit)? = null,
-    onRemoveFromPlayer: (() -> Unit)? = null,
-    selectable: Boolean = false,
-    selected: Boolean = false,
-    onToggleSelect: (() -> Unit)? = null,
-    onLongClick: (() -> Unit)? = null,
-    isFavorite: Boolean = false,
-    onToggleFavorite: (() -> Unit)? = null,
-    highlight: String = "",
-    detail: String? = null,
-    finished: Boolean = false,
-    onToggleFinished: (() -> Unit)? = null,
-) {
-    var actionsOpen by remember(track.uri) { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                when {
-                    selected -> MaterialTheme.colorScheme.primaryContainer
-                    current -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                    else -> Color.Transparent
-                },
-            )
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick,
-            )
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (selectable) {
-            Checkbox(checked = selected, onCheckedChange = { onToggleSelect?.invoke() })
-        } else {
-            TrackCover(track, size = 52.dp)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            HighlightedText(
-                text = track.title,
-                highlight = highlight,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                track.artist ?: stringResource(R.string.unknown_artist),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${formatLabel(track)} · ${formatTime(track.durationMs)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            detail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
-        }
-        if (!selectable && onToggleFavorite != null) {
-            IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    contentDescription = stringResource(
-                        if (isFavorite) R.string.favorite_remove else R.string.favorite_add,
-                    ),
-                    tint = if (isFavorite) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        }
-        if (!selectable && (onEdit != null || onRemoveFromGroup != null || onRemoveFromPlayer != null || onToggleFinished != null)) {
-            Box {
-                IconButton(onClick = { actionsOpen = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.track_actions))
-                }
-                DropdownMenu(expanded = actionsOpen, onDismissRequest = { actionsOpen = false }) {
-                    onToggleFinished?.let { toggle ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(if (finished) R.string.mark_unfinished else R.string.mark_finished)) },
-                            onClick = { actionsOpen = false; toggle() },
-                        )
-                    }
-                    onEdit?.let { edit ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.edit_tags)) },
-                            onClick = {
-                                actionsOpen = false
-                                edit()
-                            },
-                        )
-                    }
-                    onRemoveFromGroup?.let { remove ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.remove_from_group)) },
-                            onClick = {
-                                actionsOpen = false
-                                remove()
-                            },
-                        )
-                    }
-                    onRemoveFromPlayer?.let { remove ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.remove_from_player)) },
-                            onClick = {
-                                actionsOpen = false
-                                remove()
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Renders [text] with every occurrence of the search terms picked out in the primary
- * colour, so a match is visible even when it sits in a field the row does not show.
- */
-@Composable
-private fun HighlightedText(
-    text: String,
-    highlight: String,
-    style: TextStyle,
-    fontWeight: FontWeight = FontWeight.Normal,
-) {
-    val terms = remember(highlight) {
-        highlight.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-    }
-    val annotated: AnnotatedString = remember(text, terms) {
-        if (terms.isEmpty()) {
-            AnnotatedString(text)
-        } else {
-            buildAnnotatedString {
-                append(text)
-                terms.forEach { term ->
-                    var from = text.indexOf(term, ignoreCase = true)
-                    while (from >= 0) {
-                        addStyle(SpanStyle(fontWeight = FontWeight.Bold), from, from + term.length)
-                        from = text.indexOf(term, from + term.length, ignoreCase = true)
-                    }
-                }
-            }
-        }
-    }
-    Text(
-        annotated,
-        style = style,
-        fontWeight = fontWeight,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
-
-internal fun removeTrackFromPlayer(
-    library: LibraryViewModel,
-    playlists: PlaylistViewModel,
-    controller: androidx.media3.session.MediaController?,
-    track: AudioTrack,
-) {
-    controller?.let { player ->
-        val queueIndex = (0 until player.mediaItemCount)
-            .firstOrNull { player.getMediaItemAt(it).mediaId == track.uri.toString() }
-        if (queueIndex != null) player.removeMediaItem(queueIndex)
-    }
-    playlists.hideTrack(track.uri)
-    library.refreshHiddenTracks()
 }

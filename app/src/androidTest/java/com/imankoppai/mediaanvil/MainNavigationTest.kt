@@ -20,7 +20,7 @@ import org.junit.Test
 @Suppress("DEPRECATION") // The v1 rule remains compatible with StateRestorationTester.
 class MainNavigationTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = DeviceComposeRule()
 
     @Test
     fun mainTabs_switchBetweenLocalPlayerPages() {

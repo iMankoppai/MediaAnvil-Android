@@ -17,6 +17,7 @@ import com.imankoppai.mediaanvil.data.SafStorage
 import com.imankoppai.mediaanvil.model.AudioTrack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -55,6 +56,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private var hiddenTrackUris: Set<String> = preferences.hiddenTrackUris
 
     private var scanJob: Job? = null
+    private var startupJob: Job? = null
+    @Volatile private var accessGeneration = 0
+    var storageAccessGranted by mutableStateOf(hasStorageAccess())
+        private set
     private var pendingRescan = false
     private var pendingFullScan = false
     private var observerJob: Job? = null
@@ -80,10 +85,33 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
      * read permission — never "all files access".
      */
     fun hasStorageAccess(): Boolean =
-        androidx.core.content.ContextCompat.checkSelfPermission(
-            appContext,
-            DeviceAudioLibrary.readPermission,
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        DeviceAudioLibrary.hasReadAccess(appContext)
+
+    /** Permission changes affect visibility even when MediaStore's generation is unchanged. */
+    fun onStorageAccessChanged() {
+        val granted = hasStorageAccess()
+        if (granted == storageAccessGranted) return
+        storageAccessGranted = granted
+        accessGeneration++
+        if (granted) rescan(full = true)
+        else {
+            pendingRescan = false
+            pendingFullScan = false
+            startupJob?.cancel()
+            scanJob?.cancel()
+            observerJob?.cancel()
+            showPermissionRequired()
+        }
+    }
+
+    private fun showPermissionRequired() {
+        tracks = emptyList()
+        files = null
+        selectedIndex = -1
+        loading = false
+        scanFailed = false
+        message = null
+    }
 
     /**
      * Re-reads which tracks are hidden and drops them from the visible list, so the
@@ -151,11 +179,26 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
      * not flash "no audio files" in the frame before the cache arrives.
      */
     fun startup() {
+        if (!hasStorageAccess()) {
+            onStorageAccessChanged()
+            showPermissionRequired()
+            return
+        }
+        val forceFull = !storageAccessGranted
+        if (forceFull) { storageAccessGranted = true; accessGeneration++ }
+        val generation = accessGeneration
         hiddenTrackUris = preferences.hiddenTrackUris
         loading = tracks.isEmpty()
         scanFailed = false
-        viewModelScope.launch {
+        startupJob?.cancel()
+        startupJob = viewModelScope.launch {
             val snapshot = withContext(Dispatchers.IO) { LibraryCache.load(appContext) }
+            if (!hasStorageAccess()) {
+                onStorageAccessChanged()
+                showPermissionRequired()
+                return@launch
+            }
+            if (generation != accessGeneration) return@launch
             if (snapshot != null) {
                 tracks = snapshot.tracks.map { record ->
                     AudioTrack(
@@ -174,9 +217,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     .filterNot { it.uri.toString() in hiddenTrackUris }
                 files = LibraryScan(tracks)
                 loading = false
-                scanAll(quiet = true)
+                scanAll(quiet = tracks.isNotEmpty(), full = forceFull)
             } else {
-                scanAll(quiet = false)
+                scanAll(quiet = false, full = forceFull)
             }
         }
     }
@@ -186,6 +229,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun scanAll(quiet: Boolean, onLoaded: (Int) -> Unit = {}, full: Boolean = false) {
+        if (!hasStorageAccess()) {
+            onStorageAccessChanged()
+            showPermissionRequired()
+            onLoaded(0)
+            return
+        }
         if (scanJob?.isActive == true) {
             pendingRescan = true
             pendingFullScan = pendingFullScan || full
@@ -194,6 +243,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         loading = !quiet
         if (!quiet) message = null
         val allowedFolders = allowedScanFolders()
+        val generation = accessGeneration
         scanJob = viewModelScope.launch {
             val previousUri = tracks.getOrNull(selectedIndex)?.uri
             // Everything that touches the disk, the ContentResolver or the Storage
@@ -204,16 +254,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             val result = withContext(Dispatchers.IO) { cacheWriteMutex.withLock {
                 val scanned = try {
                     DeviceAudioLibrary.scan(appContext, allowedFolders, LibraryCache.load(appContext), full)
-                } catch (scanFailure: Exception) {
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (scanFailure: Exception) {
                     null
                 }
                 if (scanned == null) {
-                    scanFailed = true
                     return@withLock null
                 }
                 // Sidecar lyrics are located inside user-granted folders; without a
                 // grant the track simply shows no lyrics instead of failing the scan.
                 val withSidecars = scanned.copy(tracks = attachKnownSidecars(scanned.tracks))
+                if (generation != accessGeneration || !hasStorageAccess()) return@withLock null
                 // Keep the complete scan in cache; hidden tracks are filtered only in
                 // the UI state. This makes restoring them reliable even if the app
                 // closes during the restore scan. The mutex keeps this from racing a
@@ -222,12 +273,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 android.util.Log.d("MediaAnvilScan", "incremental=${scanned.incremental} metadataRows=${scanned.metadataRowsRead} tracks=${scanned.tracks.size}")
                 withSidecars
             } } ?: run {
+                if (!hasStorageAccess()) {
+                    onStorageAccessChanged()
+                    showPermissionRequired()
+                    return@launch
+                }
                 loading = false
+                scanFailed = true
                 if (!quiet) message = appContext.getString(com.imankoppai.mediaanvil.R.string.scan_failed)
                 onLoaded(tracks.size)
                 return@launch
             }
             val visibleTracks = result.tracks.filterNot { it.uri.toString() in hiddenTrackUris }
+            if (!result.incremental || result.metadataRowsRead > 0) CoverLoader.invalidate()
             files = result.copy(tracks = visibleTracks)
             tracks = visibleTracks
             selectedIndex = visibleTracks.indexOfFirst { it.uri == previousUri }
@@ -263,6 +321,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     /** Reflect an in-place tag edit immediately; MediaStore metadata lags behind. */
     fun applyTagEdit(uri: Uri, title: String, artist: String?) {
+        CoverLoader.invalidate()
         val cleanArtist = artist?.takeIf(String::isNotBlank)
         tracks = tracks.map { track ->
             if (track.uri == uri) track.copy(title = title, artist = cleanArtist) else track

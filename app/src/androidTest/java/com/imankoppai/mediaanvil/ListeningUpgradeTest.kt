@@ -40,7 +40,7 @@ class ListeningUpgradeTest {
         prefs.setCustomCover(Uri.parse("old"), Uri.parse("content://covers/1"))
         prefs.resumeRewindSeconds = 5
         val root = PlayerDataBackup.createBackup(prefs, listOf(track("old")))
-        assertEquals(4, root.getInt("schemaVersion"))
+        assertEquals(5, root.getInt("schemaVersion"))
         val source = BackupTrackReference("old", "episode2.mp3", "Books/", 600000, 123456)
         val match = BackupTrackMatcher.match(source, listOf(source.copy(uri = "new", relativeFolder = "Moved/")))
         val plan = PlayerDataBackup.RestorePlan(root, listOf(match), 1, false)

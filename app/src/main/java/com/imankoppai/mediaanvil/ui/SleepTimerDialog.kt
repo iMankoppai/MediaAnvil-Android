@@ -47,6 +47,7 @@ internal fun SleepTimerDialog(
     initialMinutes: Int,
     preferences: com.imankoppai.mediaanvil.data.PlaybackPreferences,
     onStart: (Int) -> Unit,
+    onStartEpisodes: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var hours by remember { mutableStateOf(initialMinutes / 60) }
@@ -55,12 +56,22 @@ internal fun SleepTimerDialog(
     // the switches re-render, and persist on every change.
     var finishTrack by remember { mutableStateOf(preferences.sleepFinishTrack) }
     var closeApp by remember { mutableStateOf(preferences.sleepCloseApp) }
+    var byEpisodes by remember { mutableStateOf(preferences.sleepEpisodesRemaining > 0) }
+    var episodes by remember { mutableStateOf(preferences.sleepEpisodesRemaining.coerceAtLeast(1)) }
     val total = hours * 60 + minutes
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.sleep_timer)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.FilterChip(!byEpisodes, { byEpisodes = false }, label = { Text(stringResource(R.string.sleep_timer_by_time)) })
+                    androidx.compose.material3.FilterChip(byEpisodes, { byEpisodes = true }, label = { Text(stringResource(R.string.sleep_timer_by_episodes)) })
+                }
+                if (byEpisodes) {
+                    Text(stringResource(R.string.sleep_timer_episodes))
+                    WheelPicker((1..99).toList(), episodes - 1, { episodes = it + 1 })
+                } else {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -93,6 +104,7 @@ internal fun SleepTimerDialog(
                         preferences.sleepFinishTrack = it
                     },
                 )
+                }
                 ToggleRow(
                     label = stringResource(R.string.sleep_close_app),
                     checked = closeApp,
@@ -104,7 +116,7 @@ internal fun SleepTimerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onStart(total); onDismiss() }, enabled = total > 0) {
+            TextButton(onClick = { if (byEpisodes) onStartEpisodes(episodes) else onStart(total); onDismiss() }, enabled = byEpisodes || total > 0) {
                 Text(stringResource(R.string.confirm))
             }
         },

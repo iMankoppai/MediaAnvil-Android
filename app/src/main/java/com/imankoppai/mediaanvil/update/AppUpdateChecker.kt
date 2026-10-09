@@ -78,9 +78,16 @@ object AppUpdateChecker {
         return false
     }
 
-    private fun versionParts(value: String): List<Int> =
-        value.trim().removePrefix("v").removePrefix("V")
-            .substringBefore('-')
+    private fun versionParts(value: String): List<Int> {
+        val version = value.trim().removePrefix("v").removePrefix("V").substringBefore('-')
+        // This repository's published 1.01–1.07 used a zero-padded update number.
+        // Treat those names as 1.0.1–1.0.7 during the naming migration, rather than
+        // interpreting 1.07 as the seventh minor release and offering a downgrade.
+        val legacy = Regex("^(\\d+)\\.0([1-9]\\d*)$").matchEntire(version)
+        if (legacy != null) return listOf(legacy.groupValues[1].toIntOrNull() ?: 0, 0,
+            legacy.groupValues[2].toIntOrNull() ?: 0)
+        return version
             .split('.')
             .map { part -> part.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
+    }
 }

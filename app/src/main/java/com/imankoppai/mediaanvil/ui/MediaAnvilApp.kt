@@ -54,6 +54,9 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.imankoppai.mediaanvil.R
 import com.imankoppai.mediaanvil.playback.PlaybackService
 
@@ -71,6 +74,7 @@ fun MediaAnvilApp() {
     val playlists: PlaylistViewModel = viewModel()
     val settings: SettingsViewModel = viewModel()
     val updates: UpdateViewModel = viewModel()
+    val listening: ListeningViewModel = viewModel()
     var controller by remember { mutableStateOf<MediaController?>(null) }
     // Survives the activity recreation a system locale change triggers, so
     // switching language stays on the current tab instead of resetting to Media.
@@ -101,7 +105,16 @@ fun MediaAnvilApp() {
     // ask for a folder through the system picker instead of "all files access".
     val audioPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { library.rescan() }
+    ) { library.onStorageAccessChanged() }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, library) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) library.onStorageAccessChanged()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     fun requestStorageAccess() {
         val needed = buildList {
@@ -113,7 +126,7 @@ fun MediaAnvilApp() {
             }
         }
         if (needed.isEmpty()) {
-            library.rescan()
+            library.rescan(full = true)
         } else {
             audioPermission.launch(needed.toTypedArray())
         }
@@ -225,7 +238,9 @@ fun MediaAnvilApp() {
                 ) {
                     RailNavigation(tab = tab, onSelect = { tab = it })
                     VerticalDivider()
-                    Box(Modifier.weight(1f).fillMaxHeight()) { pageContent() }
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        androidx.compose.runtime.CompositionLocalProvider(LocalFullPlayCounts provides listening.fullPlayCounts) { pageContent() }
+                    }
                 }
             }
         } else {
@@ -245,7 +260,7 @@ fun MediaAnvilApp() {
                         .padding(padding)
                         .consumeWindowInsets(padding),
                 ) {
-                    pageContent()
+                    androidx.compose.runtime.CompositionLocalProvider(LocalFullPlayCounts provides listening.fullPlayCounts) { pageContent() }
                 }
             }
         }

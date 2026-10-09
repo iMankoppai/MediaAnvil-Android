@@ -30,6 +30,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var exoPlayer: ExoPlayer? = null
     private lateinit var preferences: PlaybackPreferences
+    private lateinit var fullPlays: FullPlayTracker
     private val handler = Handler(Looper.getMainLooper())
     private var loopStartMs = -1L
     private var loopEndMs = -1L
@@ -43,9 +44,17 @@ class PlaybackService : MediaSessionService() {
     private var sleepFadeRestoreVolume = 1.0f
     private var suppressProgressWrites = false
     private var restoreGeneration = 0
+    private var queueDirty = true
+    private var episodeBoundaryHandled = false
 
     /** Keeps the notification buttons and the seek increments on the current settings. */
     private val preferencesListener: (String) -> Unit = { key ->
+        if (key == "sleep_episodes_remaining") handler.post {
+            exoPlayer?.pauseAtEndOfMediaItems = stopAfterTrackEnd || preferences.sleepEpisodesRemaining > 0
+        }
+        if (key == "playback_speed" || key.startsWith("track_speed:") || key.startsWith("work_speed:")) handler.post {
+            exoPlayer?.currentMediaItem?.let(::applyScopedSpeed)
+        }
         if (key == "seek_back_seconds" || key == "seek_forward_seconds") handler.post {
             exoPlayer?.let { player ->
                 player.setSeekBackIncrementMs(preferences.seekBackSeconds * 1_000L)
@@ -66,6 +75,7 @@ class PlaybackService : MediaSessionService() {
                 nextDelayMs = PLAYBACK_POLL_MS
             }
             mediaSession?.player?.let { player ->
+                sampleFullPlay(player)
                 updateSleepFade(player)
                 val active = loopEndMs > loopStartMs
                 val playing = player.isPlaying && player.currentPosition >= loopEndMs
@@ -98,10 +108,12 @@ class PlaybackService : MediaSessionService() {
     /** Persists the current queue, index and position for "continue where you left off". */
     private fun saveResumeState(player: Player, force: Boolean = false) {
         if (suppressProgressWrites) return
-        if (!preferences.resumePlayback) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (!force && now - lastResumeSaveAt < POSITION_SAVE_INTERVAL_MS) return
         lastResumeSaveAt = now
+        sampleFullPlay(player)
+        fullPlays.checkpoint()
+        if (!preferences.resumePlayback) return
         val id = player.currentMediaItem?.mediaId ?: return
         val pos = player.currentPosition.coerceAtLeast(0L)
         val duration = player.duration
@@ -113,13 +125,14 @@ class PlaybackService : MediaSessionService() {
             pos > 3_000L -> pos
             else -> -1L
         }
-        val uris = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
+        val uris = if (queueDirty) (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId } else null
+        queueDirty = false
         preferences.savePlaybackSnapshot(
             uri = id,
             positionMs = savedPosition,
             queueUris = uris,
             queueIndex = player.currentMediaItemIndex,
-            synchronous = force,
+            synchronous = false,
             completed = completed,
         )
     }
@@ -147,6 +160,7 @@ class PlaybackService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             val player = mediaSession?.player ?: return
             if (playbackState != Player.STATE_ENDED) return
+            if (finishSleepEpisode(player)) return
             // "Finish this track, then stop" is spent once its track has ended; it
             // also suppresses the wrap-around below.
             val stopHere = stopAfterTrackEnd
@@ -167,6 +181,10 @@ class PlaybackService : MediaSessionService() {
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (playWhenReady) episodeBoundaryHandled = false
+            if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                mediaSession?.player?.let { finishSleepEpisode(it) }
+            }
             // Playback resumed, so the pending "stop after this track" is spent: clear
             // it here or it would pause every later track as well. The pause the timer
             // itself causes reports playWhenReady = false, so it does not clear it.
@@ -183,6 +201,7 @@ class PlaybackService : MediaSessionService() {
             TransportNotificationProvider(this).apply { setSmallIcon(R.drawable.ic_notification_small) },
         )
         preferences = PlaybackPreferences(this)
+        fullPlays = FullPlayTracker(preferences::fullPlayAttempt, preferences::saveFullPlayAttempt, preferences::incrementFullPlayCount)
         val audioAttributes = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
@@ -201,10 +220,43 @@ class PlaybackService : MediaSessionService() {
         player.shuffleModeEnabled = preferences.shuffleEnabled
         player.repeatMode = preferences.repeatMode
         exoPlayer = player
+        // Observe ends before the sleep/wrap-around listeners seek to another item.
+        player.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (suppressProgressWrites) return
+                fullPlays.discontinuity(oldPosition.mediaItem?.mediaId, oldPosition.positionMs,
+                    newPosition.mediaItem?.mediaId, newPosition.positionMs,
+                    reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION, player.duration,
+                    player.isPlaying, player.playbackParameters.speed, SystemClock.elapsedRealtime(), loopEndMs > loopStartMs)
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (suppressProgressWrites) return
+                sampleFullPlay(player)
+                if (playbackState == Player.STATE_ENDED) fullPlays.finish(loopEndMs > loopStartMs)
+            }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (suppressProgressWrites) return
+                sampleFullPlay(player)
+                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                    fullPlays.finish(loopEndMs > loopStartMs)
+                }
+            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { sampleFullPlay(player) }
+            override fun onEvents(player: Player, events: Player.Events) { sampleFullPlay(player) }
+        })
+        player.pauseAtEndOfMediaItems = preferences.sleepEpisodesRemaining > 0
         preferences.registerChangeListener(preferencesListener)
         player.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+                    queueDirty = true
+                    saveResumeState(player, force = true)
+                }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 clearLoop()
+                mediaItem?.let(::applyScopedSpeed)
             }
         })
         player.addListener(wrapAroundListener)
@@ -214,7 +266,8 @@ class PlaybackService : MediaSessionService() {
                 val oldUri = oldPosition.mediaItem?.mediaId ?: return
                 if (oldUri != newPosition.mediaItem?.mediaId || reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
                     if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) preferences.markFinished(oldUri, true)
-                    else if (preferences.resumePlayback) preferences.setPlaybackPosition(oldUri, oldPosition.positionMs.takeIf { it > 3_000 } ?: -1)
+                    else if (preferences.resumePlayback) preferences.setPlaybackPosition(oldUri,
+                        oldPosition.positionMs.takeIf { it > 3_000 && oldUri !in preferences.finishedTrackUris } ?: -1)
                 }
             }
 
@@ -297,12 +350,14 @@ class PlaybackService : MediaSessionService() {
                     command: SessionCommand,
                     args: Bundle,
                 ): ListenableFuture<SessionResult> {
+                    sampleFullPlay(player)
                     when (command.customAction) {
                         COMMAND_RELOAD_PLAYBACK -> {
                             if (controllerInfo.uid != android.os.Process.myUid()) {
                                 return Futures.immediateFuture(SessionResult(androidx.media3.session.SessionError.ERROR_PERMISSION_DENIED))
                             }
                             suppressProgressWrites = true
+                            fullPlays.reset()
                             try {
                                 player.pause()
                                 player.clearMediaItems()
@@ -358,6 +413,7 @@ class PlaybackService : MediaSessionService() {
                             exoPlayer?.pauseAtEndOfMediaItems = false
                         }
                     }
+                    sampleFullPlay(player)
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             })
@@ -399,12 +455,14 @@ class PlaybackService : MediaSessionService() {
         if (uris.isEmpty() || savedIndex !in uris.indices) return
         Thread {
             val metadata = mutableMapOf<String, Triple<String, String?, String?>>()
+            val workKeys = mutableMapOf<String, String>()
             runCatching {
                 val projection = arrayOf(
                     MediaStore.Audio.Media._ID,
                     MediaStore.Audio.Media.TITLE,
                     MediaStore.Audio.Media.ARTIST,
                     MediaStore.Audio.Media.ALBUM,
+                    if (android.os.Build.VERSION.SDK_INT >= 29) MediaStore.Audio.Media.RELATIVE_PATH else MediaStore.Audio.Media.DATA,
                 )
                 // Same collections the library scanner uses, so restored URIs match saved
                 // ones. getExternalVolumeNames is API 29+, hence the version check.
@@ -422,6 +480,7 @@ class PlaybackService : MediaSessionService() {
                         val titleColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                         val artistColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                         val albumColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                        val folderColumn = cursor.getColumnIndexOrThrow(projection.last())
                         while (cursor.moveToNext()) {
                             val id = collection.buildUpon()
                                 .appendPath(cursor.getLong(idColumn).toString())
@@ -432,6 +491,9 @@ class PlaybackService : MediaSessionService() {
                                 cursor.getString(artistColumn)?.takeIf(String::isNotBlank),
                                 cursor.getString(albumColumn)?.takeIf(String::isNotBlank),
                             )
+                            val folder = if (android.os.Build.VERSION.SDK_INT >= 29) cursor.getString(folderColumn).orEmpty()
+                                else com.imankoppai.mediaanvil.data.DeviceAudioLibrary.relativeFolderFromAbsolute(cursor.getString(folderColumn).orEmpty())
+                            workKeys[id] = "${collection.pathSegments.firstOrNull().orEmpty()}|${folder.trim('/')}"
                         }
                     }
                 }
@@ -454,6 +516,7 @@ class PlaybackService : MediaSessionService() {
                                     .setTitle(found.first)
                                     .setArtist(found.second)
                                     .setAlbumTitle(found.third)
+                                    .setExtras(Bundle().apply { putString(com.imankoppai.mediaanvil.data.WORK_KEY, workKeys[id]) })
                                     .build(),
                             )
                             .build()
@@ -463,7 +526,7 @@ class PlaybackService : MediaSessionService() {
                 val start = restoredIndex.coerceIn(0, items.size - 1)
                 val restoredId = items[start].mediaId
                 val savedPos = com.imankoppai.mediaanvil.data.ListeningProgress.resumePosition(
-                    preferences.playbackPositionFor(restoredId), preferences.resumeRewindSeconds, 0)
+                    preferences.playbackPositionFor(restoredId), preferences.rewindFor(workKeys[restoredId].orEmpty()), 0)
                 // Read the stored loop before setMediaItems: that call fires a media item
                 // transition, and the transition listener clears the stored markers.
                 val storedLoopUri = preferences.loopTrackUri
@@ -594,6 +657,41 @@ class PlaybackService : MediaSessionService() {
             player.currentMediaItem?.mediaMetadata,
             player.isPlaying,
         )
+    }
+
+    private fun applyScopedSpeed(item: MediaItem) {
+        val folder = item.mediaMetadata.extras?.getString(com.imankoppai.mediaanvil.data.WORK_KEY).orEmpty()
+        exoPlayer?.playbackParameters = androidx.media3.common.PlaybackParameters(preferences.speedFor(item.mediaId, folder))
+    }
+
+    private fun sampleFullPlay(player: Player) {
+        if (suppressProgressWrites) return
+        val id = player.currentMediaItem?.mediaId ?: return
+        fullPlays.observe(id, player.currentPosition, player.duration, player.isPlaying,
+            player.playbackParameters.speed, SystemClock.elapsedRealtime(), loopEndMs > loopStartMs)
+    }
+
+    /** Count natural ends only; pausing and manually skipping do not spend an episode. */
+    private fun finishSleepEpisode(player: Player): Boolean {
+        val remaining = preferences.sleepEpisodesRemaining
+        if (remaining <= 0) return episodeBoundaryHandled
+        if (episodeBoundaryHandled) return true
+        episodeBoundaryHandled = true
+        player.currentMediaItem?.mediaId?.let { preferences.markFinished(it, true) }
+        val next = remaining - 1
+        preferences.sleepEpisodesRemaining = next
+        if (next == 0) {
+            exoPlayer?.pauseAtEndOfMediaItems = stopAfterTrackEnd
+            player.pause()
+            if (preferences.sleepCloseApp) closeForSleep()
+        } else handler.post {
+            if (exoPlayer == null || preferences.sleepEpisodesRemaining != next || stopAfterTrackEnd) return@post
+            if (player.repeatMode == Player.REPEAT_MODE_ONE) player.seekTo(0L)
+            else if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+            else player.seekTo(0, 0L)
+            player.play()
+        }
+        return true
     }
 
     private fun clearLoop() {

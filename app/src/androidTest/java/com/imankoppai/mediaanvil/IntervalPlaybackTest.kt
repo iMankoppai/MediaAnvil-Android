@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 class IntervalPlaybackTest {
     // Android 15+ grants audio focus only to a foreground app or an active FGS.
     // Match the user's action of starting an interval from the visible player.
-    @get:Rule val foreground = ActivityScenarioRule(ComponentActivity::class.java)
+    @get:Rule val foreground = DeviceActivityRule()
 
     @Test fun savedIntervalStartsFromPausedLoopsAndRejectsInvalidBoundaries() {
         val context=ApplicationProvider.getApplicationContext<Context>()

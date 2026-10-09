@@ -22,10 +22,12 @@ class ListeningViewModel(application: Application) : AndroidViewModel(applicatio
         private set
     var recentEntries by mutableStateOf<List<PlayHistory.Entry>>(emptyList())
         private set
+    var fullPlayCounts by mutableStateOf<Map<String, Long>>(emptyMap())
+        private set
     private val editDispatcher = Dispatchers.IO.limitedParallelism(1)
     private var refreshJob: Job? = null
     private val listener: (String) -> Unit = { key ->
-        if (key in setOf("audio_bookmarks", "playback_positions", "finished_track_uris", "play_history")) refresh()
+        if (key.startsWith("progress:") || key.startsWith("full_play_count:") || key in setOf("audio_bookmarks", "playback_positions", "finished_track_uris", "play_history")) refresh()
     }
 
     init {
@@ -41,12 +43,13 @@ class ListeningViewModel(application: Application) : AndroidViewModel(applicatio
                     val json = runCatching { JSONObject(preferences.playbackPositions) }.getOrElse { JSONObject() }
                     Snapshot(Bookmarks.decode(preferences.bookmarksRaw),
                         json.keys().asSequence().associateWith { json.optLong(it).coerceAtLeast(0) },
-                        preferences.finishedTrackUris, preferences.playHistory())
+                        preferences.finishedTrackUris, preferences.playHistory(), preferences.fullPlayCounts())
                 }
                 bookmarks = snapshot.bookmarks
                 positions = snapshot.positions
                 finishedUris = snapshot.finished
                 recentEntries = snapshot.recent
+                fullPlayCounts = snapshot.counts
             }
         }
     }
@@ -78,10 +81,14 @@ class ListeningViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch(editDispatcher) { preferences.markFinished(uri, finished) }
     }
 
+    fun markFinished(uris: Collection<String>, finished: Boolean) {
+        viewModelScope.launch(editDispatcher) { preferences.markFinished(uris, finished) }
+    }
+
     override fun onCleared() {
         preferences.unregisterChangeListener(listener)
         super.onCleared()
     }
 
-    private data class Snapshot(val bookmarks: List<AudioBookmark>, val positions: Map<String, Long>, val finished: Set<String>, val recent: List<PlayHistory.Entry>)
+    private data class Snapshot(val bookmarks: List<AudioBookmark>, val positions: Map<String, Long>, val finished: Set<String>, val recent: List<PlayHistory.Entry>, val counts: Map<String, Long>)
 }

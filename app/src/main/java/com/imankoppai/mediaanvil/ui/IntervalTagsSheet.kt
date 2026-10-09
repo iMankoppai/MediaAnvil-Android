@@ -44,7 +44,7 @@ internal fun IntervalTagsSheet(
                     end = null
                     adding = true
                 }) { Text(stringResource(R.string.bookmark_add)) }
-                OutlinedButton(enabled = current && IntervalTimes.valid(loopA, loopB, actualDuration), onClick = {
+                Button(enabled = current && IntervalTimes.valid(loopA, loopB, actualDuration), onClick = {
                     start = loopA; end = loopB; adding = true
                 }) { Text(stringResource(R.string.interval_save_ab)) }
             }
@@ -105,8 +105,8 @@ internal fun IntervalTagEditor(
     var endText by rememberSaveable { mutableStateOf(initialEnd?.let(IntervalTimes::format).orEmpty()) }
     var name by rememberSaveable { mutableStateOf(initialName) }
     var attempted by rememberSaveable { mutableStateOf(false) }
-    val start = IntervalTimes.parse(startText)
-    val end = IntervalTimes.parse(endText)
+    val start = if (startText == IntervalTimes.format(initialStart)) initialStart else IntervalTimes.parseMinutesSeconds(startText)
+    val end = if (initialEnd != null && endText == IntervalTimes.format(initialEnd)) initialEnd else IntervalTimes.parseMinutesSeconds(endText)
     val valid = IntervalTimes.valid(start, end, durationMs)
     AlertDialog(
         onDismissRequest = onDismiss,

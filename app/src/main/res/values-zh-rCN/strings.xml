@@ -1,4 +1,13 @@
 <resources>
+    <string name="full_play_count_short">%1$d次</string>
+    <plurals name="full_play_count_description">
+        <item quantity="other">完整播放 %1$d 次</item>
+    </plurals>
+    <string name="lyrics_script_original">原文</string>
+    <string name="lyrics_script_simplified">简体</string>
+    <string name="lyrics_script_traditional">繁体</string>
+    <string name="lyrics_script_converting">正在转换歌词…</string>
+    <string name="lyrics_script_failed">歌词转换失败，请重试或选择原文。</string>
     <string name="app_name">MediaAnvil</string>
     <string name="storage_access_action">允许访问音频</string>
     <string name="empty_folder_hint">所选文件夹中没有找到受支持的音频，可在下方添加或更换文件夹。</string>
@@ -220,20 +229,20 @@
     <string name="backup_choose_match">有多个匹配文件，请选择正确的音频：</string>
     <string name="backup_keep_missing">暂不匹配</string>
     <string name="bookmarks">区间标签</string>
-    <string name="bookmark_add">添加区间标签</string>
+    <string name="bookmark_add">手动添加</string>
     <string name="bookmark_edit">编辑区间标签</string>
     <string name="bookmark_note">标签文字</string>
     <string name="bookmarks_empty">当前音频还没有区间标签</string>
-    <string name="interval_save_ab">保存当前 A–B 区间</string>
+    <string name="interval_save_ab">从 A–B 添加</string>
     <string name="interval_start">开始时间</string>
     <string name="interval_end">结束时间</string>
     <string name="interval_current_start">以当前位置为开始</string>
     <string name="interval_current_end">以当前位置为结束</string>
-    <string name="interval_time_hint">时间格式为 分:秒 或 时:分:秒，可填写毫秒。点击标签跳到开头，点击循环按钮反复播放该区间。</string>
+    <string name="interval_time_hint">时间格式为 分:秒，例如 1:30。点击标签跳到开头，点击循环按钮反复播放该区间。</string>
     <string name="interval_invalid">请填写标签文字和有效时间：结束须晚于开始，且不能超过音频时长。</string>
     <string name="interval_legacy">%1$s · 旧书签待补充结束时间</string>
     <string name="interval_unnamed">未命名标签</string>
-    <string name="interval_loop">循环播放该区间</string>
+    <string name="interval_loop">循环此区间</string>
     <string name="view_folders">文件夹</string>
     <string name="folder_root">根目录</string>
     <string name="folder_storage">设备存储</string>
@@ -254,4 +263,26 @@
     <string name="backup_audio_permission">请授予音频读取权限，以匹配备份记录与本机文件。</string>
     <string name="backup_review_matches">查看已匹配文件</string>
     <string name="backup_hide_matches">收起已匹配文件</string>
+    <string name="playback_speed_title">播放倍速</string>
+    <string name="batch_speed">设置倍速</string>
+    <string name="batch_speed_hint">统一设置所选音频的播放倍速，不修改音频文件。单条设置优先于作品默认设置。</string>
+    <string name="playback_inherit">恢复默认</string>
+    <string name="work_preferences">作品设置</string>
+    <string name="work_preferences_hint">适用于这个文件夹，包括以后新增的音频；单独设置过倍速的音频优先使用自己的设置。</string>
+    <string name="work_resume_rewind">续播时回退</string>
+    <string name="work_play_order">播放顺序</string>
+    <string name="work_order_natural">按集数顺序</string>
+    <string name="work_order_loop">列表循环</string>
+    <string name="work_progress">已听完 %1$d / %2$d 集 · 整部进度 %3$d%%</string>
+    <string name="work_continue_episode">继续收听：%1$s</string>
+    <string name="work_continue">继续收听</string>
+    <string name="work_next">下一集</string>
+    <string name="work_select">选择音频</string>
+    <string name="work_episode_position">已听到 %1$s</string>
+    <string name="sleep_timer_mode">停止条件</string>
+    <string name="sleep_timer_by_time">按时间</string>
+    <string name="sleep_timer_by_episodes">按集数</string>
+    <string name="sleep_timer_episodes">听完几集后停止（包含当前这集）</string>
+    <string name="sleep_timer_episode_status">再听完 %1$d 集停止</string>
+
 </resources>

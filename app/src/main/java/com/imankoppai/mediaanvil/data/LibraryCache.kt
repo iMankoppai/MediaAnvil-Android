@@ -32,17 +32,19 @@ object LibraryCache {
         val savedAt: Long,
         val checkpoints: Map<String, MediaCheckpoint> = emptyMap(),
         val folderScope: Set<String> = emptySet(),
+        val audioReadGranted: Boolean? = null,
     ) {
         fun asScan(): LibraryScan = LibraryScan(tracks.map { record ->
             com.imankoppai.mediaanvil.model.AudioTrack(record.uri, record.fileName, record.title, record.artist, record.album,
                 record.durationMs, record.subtitleUri, record.subtitleExtension, record.relativeFolder, record.sizeBytes)
-        }, checkpoints = checkpoints, folderScope = folderScope)
+        }, checkpoints = checkpoints, folderScope = folderScope, audioReadGranted = audioReadGranted)
     }
 
     fun save(context: Context, scan: LibraryScan) {
         runCatching {
             val root = JSONObject()
                 .put("savedAt", System.currentTimeMillis())
+                .put("audioReadGranted", scan.audioReadGranted ?: DeviceAudioLibrary.hasReadAccess(context))
                 .put("folderScope", JSONArray(scan.folderScope.sorted()))
                 .put("checkpoints", JSONObject().apply {
                     scan.checkpoints.forEach { (volume, checkpoint) ->
@@ -111,7 +113,8 @@ object LibraryCache {
                 .also { require(it.version.isNotBlank() && it.generation >= 0) }
         }
         val scope = root.optJSONArray("folderScope") ?: JSONArray()
-        Snapshot(tracks, root.optLong("savedAt"), checkpoints, (0 until scope.length()).map { scope.getString(it) }.toSet())
+        Snapshot(tracks, root.optLong("savedAt"), checkpoints, (0 until scope.length()).map { scope.getString(it) }.toSet(),
+            root.takeIf { it.has("audioReadGranted") }?.getBoolean("audioReadGranted"))
     }.getOrNull()
 
     /** Best-effort conversion of a V1.02 absolute parentPath into a relative folder. */

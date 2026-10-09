@@ -17,6 +17,16 @@ class AppUpdateCheckerTest {
         assertFalse(AppUpdateChecker.isNewer("v1.02", "1.02"))
     }
 
+    @Test fun legacyReleaseNumbersRemainComparableAfterThreePartMigration() {
+        assertTrue(AppUpdateChecker.isNewer("v1.0.8", "1.07"))
+        assertFalse(AppUpdateChecker.isNewer("v1.07", "1.0.8"))
+        assertFalse(AppUpdateChecker.isNewer("v1.0.7", "1.07"))
+        assertFalse(AppUpdateChecker.isNewer("v1.07", "1.0.7"))
+        assertTrue(AppUpdateChecker.isNewer("v1.1.0", "1.0.8"))
+        assertTrue(AppUpdateChecker.isNewer("v1.0.9", "1.0.8"))
+        assertFalse(AppUpdateChecker.isNewer("v1.0.8", "1.0.8-debug"))
+    }
+
     @Test fun parsesStandardSha256Files() {
         val hash = "a".repeat(64)
         assertEquals(hash, AppUpdateInstaller.parseExpectedSha256("$hash  MediaAnvil-v1.02.apk\n"))

@@ -1,4 +1,14 @@
 <resources>
+    <string name="full_play_count_short">%1$d×</string>
+    <plurals name="full_play_count_description">
+        <item quantity="one">Played completely %1$d time</item>
+        <item quantity="other">Played completely %1$d times</item>
+    </plurals>
+    <string name="lyrics_script_original">Original</string>
+    <string name="lyrics_script_simplified">Simplified</string>
+    <string name="lyrics_script_traditional">Traditional</string>
+    <string name="lyrics_script_converting">Converting lyrics…</string>
+    <string name="lyrics_script_failed">Could not convert lyrics. Please try again or choose Original.</string>
     <string name="app_name">MediaAnvil</string>
     <string name="storage_access_action">Allow access to audio</string>
     <string name="empty_folder_hint">No supported audio was found in the selected folders. Add or change them below.</string>
@@ -220,16 +230,16 @@
     <string name="backup_choose_match">Several files match. Choose the correct one:</string>
     <string name="backup_keep_missing">Leave unmatched</string>
     <string name="bookmarks">Interval labels</string>
-    <string name="bookmark_add">Add interval label</string>
+    <string name="bookmark_add">Add manually</string>
     <string name="bookmark_edit">Edit interval label</string>
     <string name="bookmark_note">Label text</string>
     <string name="bookmarks_empty">No interval labels for this audio yet</string>
-    <string name="interval_save_ab">Save current A–B range</string>
+    <string name="interval_save_ab">Add from A–B</string>
     <string name="interval_start">Start time</string>
     <string name="interval_end">End time</string>
     <string name="interval_current_start">Use current position as start</string>
     <string name="interval_current_end">Use current position as end</string>
-    <string name="interval_time_hint">Use mm:ss or hh:mm:ss; milliseconds are optional. Tap a label to jump, or the loop button to repeat its range.</string>
+    <string name="interval_time_hint">Use minutes:seconds, such as 1:30. Tap a label to jump, or the loop button to repeat its range.</string>
     <string name="interval_invalid">Enter label text and valid times: the end must be after the start and within the audio duration.</string>
     <string name="interval_legacy">%1$s · Set an end time to convert this old bookmark</string>
     <string name="interval_unnamed">Unnamed label</string>
@@ -254,4 +264,26 @@
     <string name="backup_audio_permission">Allow audio access to match backup records to files on this device.</string>
     <string name="backup_review_matches">Review matched files</string>
     <string name="backup_hide_matches">Hide matched files</string>
+    <string name="playback_speed_title">Playback speed</string>
+    <string name="batch_speed">Set playback speed</string>
+    <string name="batch_speed_hint">Apply to selected audio. This changes playback only. Individual settings override the work default.</string>
+    <string name="playback_inherit">Use default</string>
+    <string name="work_preferences">Work settings</string>
+    <string name="work_preferences_hint">Applies to this folder, including future episodes. Individually set speeds take priority.</string>
+    <string name="work_resume_rewind">Rewind when resuming</string>
+    <string name="work_play_order">Playback order</string>
+    <string name="work_order_natural">Episode order</string>
+    <string name="work_order_loop">Repeat list</string>
+    <string name="work_progress">Finished %1$d of %2$d · Progress %3$d%%</string>
+    <string name="work_continue_episode">Continue: %1$s</string>
+    <string name="work_continue">Continue listening</string>
+    <string name="work_next">Next episode</string>
+    <string name="work_select">Select episodes</string>
+    <string name="work_episode_position">Listened to %1$s</string>
+    <string name="sleep_timer_mode">Stop condition</string>
+    <string name="sleep_timer_by_time">After a time</string>
+    <string name="sleep_timer_by_episodes">After episodes</string>
+    <string name="sleep_timer_episodes">Stop after this many episodes (including current)</string>
+    <string name="sleep_timer_episode_status">Stop after %1$d more episodes</string>
+
 </resources>

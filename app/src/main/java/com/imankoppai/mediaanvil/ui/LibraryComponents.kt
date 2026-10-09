@@ -40,7 +40,7 @@ import com.imankoppai.mediaanvil.model.AudioTrack
 internal fun TrackCover(track: AudioTrack, size: androidx.compose.ui.unit.Dp, corner: Int = 12) {
     val context = LocalContext.current
     var cover by remember(track.uri) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(track.uri) {
+    LaunchedEffect(track.uri, CoverLoader.revision) {
         cover = CoverLoader.load(context, track.uri, thumbnail = true)
     }
     Box(
@@ -225,6 +225,7 @@ internal fun playFromLibrary(
     index: Int,
     queue: List<AudioTrack>,
     shuffle: Boolean = false,
+    work: String? = null,
 ) {
     val player = controller ?: return
     library.playbackError = null
@@ -238,6 +239,8 @@ internal fun playFromLibrary(
                     .setTitle(track.title)
                     .setArtist(track.artist)
                     .setAlbumTitle(track.album)
+                    .setExtras(android.os.Bundle().apply { putString(com.imankoppai.mediaanvil.data.WORK_KEY,
+                        com.imankoppai.mediaanvil.data.workKey(track)) })
                     .build(),
             )
             .build()
@@ -249,10 +252,13 @@ internal fun playFromLibrary(
         null
     }
     val resumedPosition = startPos?.let {
-        com.imankoppai.mediaanvil.data.ListeningProgress.resumePosition(it, settings.preferences.resumeRewindSeconds, queue[index].durationMs)
+        com.imankoppai.mediaanvil.data.ListeningProgress.resumePosition(it,
+            settings.preferences.rewindFor(com.imankoppai.mediaanvil.data.workKey(queue[index])), queue[index].durationMs)
     }
     player.setMediaItems(mediaItems, index, resumedPosition ?: androidx.media3.common.C.TIME_UNSET)
-    player.shuffleModeEnabled = shuffle
+    player.shuffleModeEnabled = shuffle || (work != null && settings.preferences.orderFor(work) == "shuffle")
+    if (work != null && settings.preferences.folderOrder(work) != null) player.repeatMode = if (settings.preferences.orderFor(work) == "loop")
+        androidx.media3.common.Player.REPEAT_MODE_ALL else androidx.media3.common.Player.REPEAT_MODE_OFF
     player.prepare()
     player.play()
     library.selectedIndex = library.tracks.indexOfFirst { it.uri == queue[index].uri }

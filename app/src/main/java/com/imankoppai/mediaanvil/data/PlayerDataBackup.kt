@@ -7,12 +7,12 @@ import org.json.JSONObject
 import com.imankoppai.mediaanvil.model.AudioTrack
 
 object PlayerDataBackup {
-    /** 4 adds interval tags; old apps must not silently discard their end times. */
-    private const val SCHEMA_VERSION = 4
+    /** 5 adds complete-play counts and unfinished complete-play attempts. */
+    private const val SCHEMA_VERSION = 5
     private const val MAX_BACKUP_BYTES = 16 * 1024 * 1024
 
     /** Versions this build can still read, so a V1.02 backup restores intact. */
-    private val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2, 3, 4)
+    private val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2, 3, 4, 5)
 
     data class RestorePlan(
         val root: JSONObject,
@@ -44,6 +44,7 @@ object PlayerDataBackup {
             .put("settings", JSONObject()
                 .put("language", preferences.language)
                 .put("autoLoadLyrics", preferences.autoLoadLyrics)
+                .put("lyricsScript", preferences.lyricsScript)
                 .put("playbackSpeed", preferences.playbackSpeed.toDouble())
                 .put("seekBackSeconds", preferences.seekBackSeconds)
                 .put("seekForwardSeconds", preferences.seekForwardSeconds)
@@ -77,6 +78,9 @@ object PlayerDataBackup {
             .put("lastQueueIndex", preferences.lastQueueIndex)
             .put("bookmarks", preferences.bookmarksRaw)
             .put("finishedTrackUris", JSONArray(preferences.finishedTrackUris.toList()))
+            .put("scopedPlayback", preferences.scopedPlaybackJson())
+            .put("fullPlayCounts", JSONObject(preferences.fullPlayCounts()))
+            .put("fullPlayAttempts", preferences.fullPlayAttemptsJson())
         val references = tracks.associate { track ->
             track.uri.toString() to BackupTrackReference(track.uri.toString(), track.fileName,
                 track.relativeFolder, track.durationMs, track.sizeBytes)
@@ -157,10 +161,17 @@ object PlayerDataBackup {
         listOf("hiddenTrackUris", "favoriteTrackUris", "lastQueueUris", "finishedTrackUris").forEach { key ->
             root.optJSONArray(key)?.let { root.put(key, array(it)) }
         }
-        listOf("customCovers", "lyricsOffsets", "playbackPositions").forEach { key ->
+        listOf("customCovers", "lyricsOffsets", "playbackPositions", "fullPlayCounts", "fullPlayAttempts").forEach { key ->
             root.optJSONObject(key)?.let { original ->
                 root.put(key, JSONObject().apply { original.keys().forEach { put(mapped(it), original.get(it)) } })
             }
+        }
+        root.optJSONObject("scopedPlayback")?.let { original ->
+            root.put("scopedPlayback", JSONObject().apply {
+                original.keys().forEach { key ->
+                    put(if (key.startsWith("track_speed:")) "track_speed:${mapped(key.removePrefix("track_speed:"))}" else key, original.get(key))
+                }
+            })
         }
         if (root.has("playHistory")) root.put("playHistory", PlayHistory.encode(
             PlayHistory.decode(root.optString("playHistory")).map { it.copy(uri = mapped(it.uri)) }))
@@ -197,7 +208,8 @@ object PlayerDataBackup {
         val groups = root.getJSONArray("groups")
         for (i in 0 until groups.length()) include(groups.getJSONObject(i).optJSONArray("trackUris"))
         listOf("hiddenTrackUris", "favoriteTrackUris", "lastQueueUris", "finishedTrackUris").forEach { include(root.optJSONArray(it)) }
-        listOf("customCovers", "lyricsOffsets", "playbackPositions").forEach { key -> root.optJSONObject(key)?.keys()?.forEach { add(it) } }
+        listOf("customCovers", "lyricsOffsets", "playbackPositions", "fullPlayCounts", "fullPlayAttempts").forEach { key -> root.optJSONObject(key)?.keys()?.forEach { add(it) } }
+        root.optJSONObject("scopedPlayback")?.keys()?.forEach { key -> if (key.startsWith("track_speed:")) add(key.removePrefix("track_speed:")) }
         PlayHistory.decode(root.optString("playHistory")).forEach { add(it.uri) }
         Bookmarks.decode(root.optString("bookmarks")).forEach { add(it.trackUri) }
         remove("")

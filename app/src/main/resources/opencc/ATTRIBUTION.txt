@@ -1,0 +1,10 @@
+OpenCC dictionaries, version ver.1.1.9
+Upstream: https://github.com/BYVoid/OpenCC/tree/ver.1.1.9
+Authors: BYVoid and OpenCC contributors
+License: Apache License 2.0 (see LICENSE in this directory)
+
+STCharacters.txt, STPhrases.txt, TSCharacters.txt and TSPhrases.txt are unmodified
+UTF-8 copies of the upstream data/dictionary files. MediaAnvil uses phrase-first
+longest matching with character fallbacks for offline lyric script conversion.
+This is a limited in-app converter, not the full OpenCC runtime or regional
+vocabulary conversion pipeline. No lyrics are uploaded for conversion.

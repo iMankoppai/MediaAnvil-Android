@@ -29,6 +29,7 @@
         android:theme="@style/Theme.MediaAnvil">
         <activity
             android:name=".MainActivity"
+            android:configChanges="locale|layoutDirection|uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

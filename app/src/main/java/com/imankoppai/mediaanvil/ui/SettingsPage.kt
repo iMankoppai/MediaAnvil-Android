@@ -352,13 +352,14 @@ internal fun SettingsPage(
         SettingsCard(title = stringResource(R.string.sleep_timer)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    if (sleepRemaining != null) stringResource(R.string.sleep_timer_remaining, sleepRemaining)
+                    if (settings.sleepEpisodesRemaining > 0) stringResource(R.string.sleep_timer_episode_status, settings.sleepEpisodesRemaining)
+                    else if (sleepRemaining != null) stringResource(R.string.sleep_timer_remaining, sleepRemaining)
                     else stringResource(R.string.sleep_timer_off),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (sleepRemaining != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (sleepRemaining != null || settings.sleepEpisodesRemaining > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                if (sleepRemaining != null) {
+                if (sleepRemaining != null || settings.sleepEpisodesRemaining > 0) {
                     OutlinedButton(onClick = { settings.cancelSleepTimer() }) {
                         Text(stringResource(R.string.sleep_timer_off))
                     }
@@ -374,6 +375,7 @@ internal fun SettingsPage(
                 initialMinutes = sleepRemaining ?: 30,
                 preferences = settings.preferences,
                 onStart = { minutes -> settings.startSleepTimer(minutes) },
+                onStartEpisodes = settings::startEpisodeTimer,
                 onDismiss = { sleepDialog = false },
             )
         }
