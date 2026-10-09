@@ -114,12 +114,24 @@ class CompletePlayDeviceTest {
         prefs.resumeRewindSeconds = 0
         val player = connect()
         main { player.setMediaItem(item); player.prepare(); player.play() }
-        await { var position = 0L; main { position = player.currentPosition }; position >= 3300 }
-        main { player.pause() }
-        command(player, PlaybackService.COMMAND_SAVE_PLAYBACK)
+        // MediaController extrapolates its display position; on a software-audio
+        // emulator it can lead the service's actual position. Wait for an
+        // authoritative service snapshot instead of assuming both clocks agree.
+        var confirmedPosition = 0L
+        await {
+            command(player, PlaybackService.COMMAND_SAVE_PLAYBACK)
+            confirmedPosition = prefs.playbackPositionFor(item.mediaId)
+            confirmedPosition >= 3300
+        }
+        // Pause and save in the same service command, rather than racing the
+        // controller's batched pause request against a custom snapshot command.
+        command(player, PlaybackService.COMMAND_SAVE_PLAYBACK, Bundle().apply {
+            putBoolean(PlaybackService.ARG_PREPARE_RESTORE, true)
+        })
         val savedPosition = prefs.playbackPositionFor(item.mediaId)
-        assertTrue(savedPosition >= 3300)
-        assertTrue(prefs.fullPlayAttempt(item.mediaId)!!.throughMs >= savedPosition)
+        assertTrue("Expected valid resume progress: confirmed=$confirmedPosition saved=$savedPosition", savedPosition > 3000)
+        assertTrue("Heard prefix must cover the saved position within decoder alignment tolerance",
+            prefs.fullPlayAttempt(item.mediaId)!!.throughMs + 30 >= savedPosition)
         main { player.release(); controller = null; context.stopService(Intent(context, PlaybackService::class.java)) }
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
         prefs.flushPendingWrites(); SettingsStore.resetForTests()

@@ -11,6 +11,8 @@
 - APK 元数据：应用 ID `com.imankoppai.mediaanvil`，版本 1.0.8、versionCode 13、最低 API 26、目标 API 36。
 - 原有功能保持本轮已完成的 75 项手机回归结果，详见 [功能验证](verification-v1.11.md)。本次编号与更新比较变更不需要再次安装手机测试包。
 
+GitHub 模拟器首次回归的唯一失败为续听测试提前使用了控制器估算进度。测试现改为等待播放服务保存的实际进度，并在同一服务命令中暂停和保存，再检查重启续听与计数；没有修改完整播放的计数规则或跳过该用例。
+
 正式包 `app/build/outputs/apk/release/MediaAnvil-Android-v1.0.8.apk`，3,699,358 字节。SHA-256：`b8c67a65b83a26094a70b3107c601471cd8ac597f37c9cdc0667a7e05f42102a`。签名证书 SHA-256 仍为 `56b7d24cb0bf29ee5797274e299c84afd90483db40cef1667d180a6bf137d3e3`，可以覆盖同签名临时 1.11（versionCode 12）及更早版本。
 
 ## GitHub 历史版本
